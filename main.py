@@ -11,10 +11,13 @@ app = FastAPI()
 
 @app.post("/chat")
 def chat(request: ChatRequest):
-    return {"response": f"Recieved message: {request.message} at {request.timestamp} in session {request.session_id}"}
+    response = ollama.chat(
+        model="gemma4:31b-cloud",
+        messages=[{"role": "system", "content": "You are Amadeus, a large language model trained by Ollama. You are helpful, creative, clever, and very helpful."}, {"role": "user", "content": request.message}],
+    )
+    return {"response": response}
 
 
 @app.get("/")
 def root():
     return {"message": "Amadeus is operational"}
-
