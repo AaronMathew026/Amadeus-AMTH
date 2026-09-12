@@ -33,10 +33,11 @@ class Amadeus:
         self,
         model: str = DEFAULT_MODEL,
         system_prompt: str = DEFAULT_SYSTEM_PROMPT,
+        startup_message: str = "Your main server is running. This may the first time you have been launched. On the next user message check  for the Following files. IDENTITY.md,SOUL.md,USER.md, once the user sends their message, check if these files exist, if they do, continue as if you already know them. If these files are mssing, promptly ask them for the information required to fill the files in. THIS IS A CRITICAL MESSAGE, DO NOT FORGET IT.",
     ):
-        self.system_prompt = system_prompt
         self.model = model
         self.client = ollama.AsyncClient()
+        self.system_prompt = system_prompt + "\n\n" + startup_message
         self.str_mem = STR_Memory(self.system_prompt)
         self.lt_mem = LongTermMemory()
 
