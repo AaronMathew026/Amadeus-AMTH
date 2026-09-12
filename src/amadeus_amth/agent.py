@@ -7,6 +7,7 @@ from .memory.str_memory import STR_Memory
 from .memory.lt_memory import LongTermMemory
 from .tools import memory_tool
 from .tools.workspace_tool import FUNCTIONS, SCHEMAS
+from datetime import datetime, timedelta
 
 load_dotenv()
 
@@ -65,11 +66,12 @@ class Amadeus:
             return f"Error: {name} failed: {e}"
 
     async def chat(self, user_message: str):  # thinking twin
+        timestamp = str(datetime.now())
         """Answer the user, letting the model use the workspace tools as it goes."""
         context = self.lt_mem.retrieve_memory(user_message)
         if context:
             user_message += f"\n\nContext from long-term memory:\n{context}"
-        self.str_mem.add_to_memory({"role": "user", "content": user_message})
+        self.str_mem.add_to_memory({"role": "user", "content": f"[{timestamp}] {user_message}"})
 
 
         for _ in range(MAX_ITERATIONS):
@@ -79,6 +81,7 @@ class Amadeus:
                 tools=self.schemas,
             )
             message = response.message
+        
 
             # The model's turn is remembered either way, so that on the next
             # pass it can see the tool calls it just asked for.
