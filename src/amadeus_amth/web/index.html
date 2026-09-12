@@ -2,39 +2,294 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- interactive-widget lets Android Chrome shrink the layout when the keyboard opens;
+     iOS ignores it, so the visualViewport handler at the bottom covers that case. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="theme-color" content="#0b0812">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>Amadeus</title>
+<link rel="icon" type="image/svg+xml" href="icon.svg">
+<link rel="apple-touch-icon" href="icon.svg">
+<link rel="manifest" href="manifest.json">
 <style>
-  :root { color-scheme: dark; }
+  :root {
+    color-scheme: dark;
+    --bg: #0b0812;
+    --surface: rgba(30, 22, 48, .72);
+    --surface-hi: rgba(44, 32, 70, .85);
+    --border: rgba(167, 139, 250, .16);
+    --border-hi: rgba(192, 132, 252, .55);
+    --text: #ede9f7;
+    --muted: #9b91b3;
+    --accent: #a855f7;
+    --accent-grad: linear-gradient(135deg, #a78bfa 0%, #8b5cf6 45%, #6d28d9 100%);
+    --danger: #fb7185;
+    --ok: #4ade80;
+    --app-h: 100dvh;
+    --col: 780px;
+    --ease: cubic-bezier(.2, .8, .2, 1);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
   body {
-    margin: 0; height: 100vh; display: flex; flex-direction: column;
-    background: #17171a; color: #e8e8ea;
-    font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, sans-serif;
+    margin: 0;
+    height: var(--app-h);
+    display: flex; flex-direction: column;
+    overflow: hidden;
+    background: var(--bg); color: var(--text);
+    font: 15px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -webkit-tap-highlight-color: transparent;
   }
-  #log { flex: 1; overflow-y: auto; padding: 24px 16px; }
-  .turn { max-width: 720px; margin: 0 auto 18px; }
-  .who { font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: #8a8a94; }
-  .text { white-space: pre-wrap; overflow-wrap: anywhere; }
-  .error .text { color: #ff8a7a; }
-  form { display: flex; gap: 8px; padding: 12px 16px 16px; border-top: 1px solid #2c2c32; }
-  form > * { max-width: 720px; }
+
+  /* ---- ambient background: drifting purple glows ---- */
+  .ambient { position: fixed; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; }
+  .ambient span {
+    position: absolute; width: 70vmax; height: 70vmax; border-radius: 50%;
+    background: radial-gradient(closest-side, var(--c), transparent);
+    opacity: .5; will-change: transform;
+    animation: drift var(--t) ease-in-out infinite alternate;
+  }
+  .ambient span:nth-child(1) { --c: rgba(124, 58, 237, .45); --t: 22s; top: -30vmax; left: -20vmax; }
+  .ambient span:nth-child(2) { --c: rgba(192, 38, 211, .28); --t: 28s; bottom: -35vmax; right: -25vmax; animation-delay: -8s; }
+  .ambient span:nth-child(3) { --c: rgba(99, 102, 241, .22); --t: 34s; top: 30%; left: 40%; width: 50vmax; height: 50vmax; animation-delay: -15s; }
+  .ambient::after {
+    content: ""; position: absolute; inset: 0;
+    background-image: radial-gradient(rgba(255, 255, 255, .05) 1px, transparent 1px);
+    background-size: 26px 26px;
+    mask-image: radial-gradient(ellipse at center, #000 20%, transparent 75%);
+    -webkit-mask-image: radial-gradient(ellipse at center, #000 20%, transparent 75%);
+  }
+  @keyframes drift {
+    to { transform: translate3d(12vmax, 8vmax, 0) scale(1.15); }
+  }
+
+  /* ---- header ---- */
+  header {
+    display: flex; align-items: center; gap: 12px;
+    padding: calc(12px + env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) 12px max(16px, env(safe-area-inset-left));
+    background: rgba(11, 8, 18, .55);
+    backdrop-filter: blur(16px) saturate(140%);
+    -webkit-backdrop-filter: blur(16px) saturate(140%);
+    border-bottom: 1px solid var(--border);
+    animation: fade-down .5s var(--ease) both;
+  }
+  .logo { position: relative; width: 38px; height: 38px; flex: none; }
+  .logo img { width: 100%; height: 100%; display: block; border-radius: 11px; position: relative; }
+  /* Spinning gradient ring while a reply is pending: the angle is animated rather
+     than the element, so the rounded square itself stays put. */
+  @property --angle { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
+  .logo::before {
+    content: ""; position: absolute; inset: -3px; border-radius: 14px;
+    background: conic-gradient(from var(--angle), transparent 0 55%, #e9d5ff 80%, #a855f7 100%);
+    opacity: 0; transition: opacity .3s;
+    animation: spin 1.2s linear infinite;
+  }
+  body.thinking .logo::before { opacity: 1; }
+  .brand h1 { margin: 0; font-size: 16px; font-weight: 650; letter-spacing: .01em; line-height: 1.2; }
+  .status { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+  .status i {
+    position: relative; width: 7px; height: 7px; border-radius: 50%; background: var(--muted);
+    transition: background .3s;
+  }
+  .status.online i { background: var(--ok); }
+  .status.online i::after {
+    content: ""; position: absolute; inset: 0; border-radius: 50%; background: var(--ok);
+    animation: ping 2s var(--ease) infinite;
+  }
+  .status.offline i { background: var(--danger); }
+
+  /* ---- conversation ---- */
+  #log {
+    flex: 1; overflow-y: auto; overscroll-behavior: contain;
+    padding: 24px max(16px, env(safe-area-inset-right)) 8px max(16px, env(safe-area-inset-left));
+    scroll-behavior: smooth;
+    scrollbar-width: thin; scrollbar-color: rgba(167, 139, 250, .25) transparent;
+  }
+  #log::-webkit-scrollbar { width: 8px; }
+  #log::-webkit-scrollbar-thumb { background: rgba(167, 139, 250, .22); border-radius: 8px; }
+
+  .turn {
+    display: flex; gap: 10px; align-items: flex-end;
+    max-width: var(--col); margin: 0 auto 16px;
+    animation: rise .45s var(--ease) both;
+  }
+  .turn.user { flex-direction: row-reverse; }
+  .avatar { width: 30px; height: 30px; flex: none; border-radius: 9px; margin-bottom: 20px; }
+  .col { display: flex; flex-direction: column; min-width: 0; max-width: min(80%, 640px); }
+  .turn.user .col { align-items: flex-end; }
+
+  .bubble {
+    padding: 10px 15px; border-radius: 20px;
+    white-space: pre-wrap; overflow-wrap: anywhere;
+  }
+  .turn.bot .bubble {
+    background: var(--surface); border: 1px solid var(--border);
+    border-bottom-left-radius: 6px;
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  }
+  .turn.user .bubble {
+    background: var(--accent-grad); color: #fff;
+    border-bottom-right-radius: 6px;
+    box-shadow: 0 6px 24px -8px rgba(139, 92, 246, .65);
+  }
+  .turn.error .bubble { border-color: rgba(251, 113, 133, .45); color: #fecdd3; background: rgba(76, 17, 34, .5); }
+  .bubble.reveal { animation: reveal .4s var(--ease) both; }
+  .meta { font-size: 11px; color: var(--muted); margin: 5px 6px 0; opacity: .8; }
+
+  .typing { display: inline-flex; gap: 5px; padding: 6px 2px; }
+  .typing i {
+    width: 7px; height: 7px; border-radius: 50%; background: #c4b5fd;
+    animation: bounce 1.2s ease-in-out infinite;
+  }
+  .typing i:nth-child(2) { animation-delay: .15s; }
+  .typing i:nth-child(3) { animation-delay: .3s; }
+
+  /* ---- empty state ---- */
+  .empty {
+    min-height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    text-align: center; padding: 24px 8px 40px; gap: 6px;
+    transition: opacity .35s, transform .35s var(--ease);
+  }
+  body.started .empty { display: none; }
+  .empty .orb { width: 84px; height: 84px; margin-bottom: 18px; position: relative; animation: float 5s ease-in-out infinite; }
+  .empty .orb img { width: 100%; height: 100%; border-radius: 24px; position: relative; }
+  .empty .orb::before {
+    content: ""; position: absolute; inset: -18px; border-radius: 50%;
+    background: radial-gradient(closest-side, rgba(168, 85, 247, .55), transparent);
+    animation: glow 3.2s ease-in-out infinite;
+  }
+  .empty h2 {
+    margin: 0; font-size: clamp(24px, 6vw, 32px); font-weight: 700; letter-spacing: -.01em;
+    background: linear-gradient(90deg, #f5f3ff, #c4b5fd, #e879f9, #c4b5fd, #f5f3ff);
+    background-size: 200% auto;
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+    animation: shimmer 6s linear infinite;
+  }
+  .empty p { margin: 0 0 20px; color: var(--muted); max-width: 34ch; }
+  .chips { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; max-width: 520px; }
+  .chip {
+    padding: 9px 14px; border-radius: 999px;
+    border: 1px solid var(--border); background: var(--surface); color: var(--text);
+    font: inherit; font-size: 14px; cursor: pointer;
+    transition: border-color .2s, background .2s, transform .2s var(--ease);
+    animation: rise .5s var(--ease) both;
+  }
+  .chip:nth-child(1) { animation-delay: .1s; }
+  .chip:nth-child(2) { animation-delay: .18s; }
+  .chip:nth-child(3) { animation-delay: .26s; }
+  .chip:hover { border-color: var(--border-hi); background: var(--surface-hi); transform: translateY(-2px); }
+  .chip:active { transform: scale(.97); }
+
+  /* ---- composer ---- */
+  form {
+    padding: 8px max(16px, env(safe-area-inset-right)) calc(12px + env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+    animation: fade-up .5s var(--ease) both;
+  }
+  .bar {
+    max-width: var(--col); margin: 0 auto;
+    display: flex; align-items: flex-end; gap: 8px;
+    padding: 6px 6px 6px 18px; border-radius: 26px;
+    background: var(--surface); border: 1px solid var(--border);
+    backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+    box-shadow: 0 10px 40px -12px rgba(0, 0, 0, .6);
+    transition: border-color .25s, box-shadow .25s;
+  }
+  .bar:focus-within {
+    border-color: var(--border-hi);
+    box-shadow: 0 0 0 4px rgba(168, 85, 247, .14), 0 10px 40px -12px rgba(124, 58, 237, .5);
+  }
   #msg {
-    flex: 1; margin-left: auto; padding: 11px 14px; border-radius: 8px;
-    border: 1px solid #3a3a42; background: #1f1f24; color: inherit; font: inherit;
+    flex: 1; min-width: 0; resize: none; max-height: 160px;
+    padding: 9px 0; border: 0; outline: 0; background: transparent;
+    color: inherit; font: inherit; font-size: 16px; line-height: 1.45; /* 16px stops iOS zooming on focus */
   }
-  #msg:focus { outline: none; border-color: #6b6bff; }
-  button {
-    margin-right: auto; padding: 0 18px; border: 0; border-radius: 8px;
-    background: #5b5bf0; color: #fff; font: inherit; cursor: pointer;
+  #msg::placeholder { color: var(--muted); }
+  #send {
+    width: 42px; height: 42px; flex: none; display: grid; place-items: center;
+    border: 0; border-radius: 50%; cursor: pointer; color: #fff;
+    background: var(--accent-grad);
+    box-shadow: 0 4px 16px -4px rgba(139, 92, 246, .8);
+    transition: transform .2s var(--ease), opacity .2s, filter .2s;
   }
-  button:disabled { opacity: .5; cursor: default; }
+  #send svg { width: 20px; height: 20px; transition: transform .25s var(--ease); }
+  #send:hover:not(:disabled) { transform: scale(1.06); filter: brightness(1.1); }
+  #send:hover:not(:disabled) svg { transform: translateY(-2px); }
+  #send:active:not(:disabled) { transform: scale(.92); }
+  #send:disabled { opacity: .35; cursor: default; box-shadow: none; }
+  .hint { max-width: var(--col); margin: 6px auto 0; text-align: center; font-size: 11px; color: var(--muted); opacity: .7; }
+  kbd { font: inherit; padding: 0 4px; border: 1px solid var(--border); border-radius: 4px; }
+
+  /* ---- animations ---- */
+  @keyframes rise { from { opacity: 0; transform: translateY(12px) scale(.98); } }
+  @keyframes reveal { from { opacity: 0; filter: blur(4px); } }
+  @keyframes fade-down { from { opacity: 0; transform: translateY(-10px); } }
+  @keyframes fade-up { from { opacity: 0; transform: translateY(10px); } }
+  @keyframes bounce { 0%, 60%, 100% { transform: translateY(0); opacity: .5; } 30% { transform: translateY(-5px); opacity: 1; } }
+  @keyframes spin { to { --angle: 360deg; } }
+  @keyframes ping { 75%, 100% { transform: scale(2.6); opacity: 0; } }
+  @keyframes float { 50% { transform: translateY(-8px); } }
+  @keyframes glow { 50% { opacity: .55; transform: scale(1.12); } }
+  @keyframes shimmer { to { background-position: 200% center; } }
+
+  /* ---- phones ---- */
+  @media (max-width: 600px) {
+    body { font-size: 15px; }
+    header { gap: 10px; padding-bottom: 10px; }
+    .logo { width: 34px; height: 34px; }
+    #log { padding-top: 16px; }
+    .turn { gap: 8px; margin-bottom: 12px; }
+    .avatar { width: 26px; height: 26px; border-radius: 8px; }
+    .col { max-width: calc(100% - 34px); }
+    .turn.user .col { max-width: 86%; }
+    .bubble { padding: 9px 13px; border-radius: 18px; }
+    form { padding-top: 6px; padding-bottom: calc(8px + env(safe-area-inset-bottom)); }
+    .bar { padding-left: 16px; }
+    .hint { display: none; }
+    .ambient span { opacity: .4; }
+  }
+  @media (hover: none) { .hint { display: none; } }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+    #log { scroll-behavior: auto; }
+  }
 </style>
 </head>
 <body>
-  <div id="log"></div>
+  <div class="ambient" aria-hidden="true"><span></span><span></span><span></span></div>
+
+  <header>
+    <div class="logo"><img src="icon.svg" alt=""></div>
+    <div class="brand">
+      <h1>Amadeus</h1>
+      <div class="status" id="status"><i></i><span id="status-text">Connecting…</span></div>
+    </div>
+  </header>
+
+  <main id="log" aria-live="polite">
+    <div class="empty" id="empty">
+      <div class="orb"><img src="icon.svg" alt=""></div>
+      <h2>Hello, I'm Amadeus</h2>
+      <p>Ask me anything, or pick a place to start.</p>
+      <div class="chips">
+        <button type="button" class="chip">What can you do?</button>
+        <button type="button" class="chip">What do you remember about me?</button>
+        <button type="button" class="chip">Help me plan my day</button>
+      </div>
+    </div>
+  </main>
+
   <form id="form">
-    <input id="msg" placeholder="Message Amadeus…" autocomplete="off" autofocus>
-    <button id="send">Send</button>
+    <div class="bar">
+      <textarea id="msg" rows="1" placeholder="Message Amadeus…" autocomplete="off" enterkeyhint="send"></textarea>
+      <button id="send" aria-label="Send" disabled>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+      </button>
+    </div>
+    <p class="hint"><kbd>Enter</kbd> to send · <kbd>Shift</kbd> + <kbd>Enter</kbd> for a new line</p>
   </form>
 
 <script>
@@ -42,29 +297,77 @@ const log = document.getElementById("log");
 const form = document.getElementById("form");
 const msg = document.getElementById("msg");
 const send = document.getElementById("send");
+const statusEl = document.getElementById("status");
+const statusText = document.getElementById("status-text");
 
-// Returns the .text node so a pending turn can be filled in once the reply lands.
-function addTurn(who, text, isError) {
+// On touch keyboards Enter inserts a newline and the send button submits.
+const touch = matchMedia("(hover: none)").matches;
+let busy = false;
+
+const scrollDown = () => log.scrollTo({ top: log.scrollHeight });
+const clock = () => new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+function syncSend() {
+  send.disabled = busy || !msg.value.trim();
+}
+
+function autoGrow() {
+  msg.style.height = "auto";
+  msg.style.height = Math.min(msg.scrollHeight, 160) + "px";
+}
+
+// Returns the bubble so a pending turn can be filled in once the reply lands.
+function addTurn(role, text) {
+  document.body.classList.add("started");
   const turn = document.createElement("div");
-  turn.className = isError ? "turn error" : "turn";
-  turn.innerHTML = '<div class="who"></div><div class="text"></div>';
-  turn.querySelector(".who").textContent = who;
-  const body = turn.querySelector(".text");
-  body.textContent = text;
+  turn.className = `turn ${role}`;
+  turn.innerHTML =
+    (role === "bot" ? '<img class="avatar" src="icon.svg" alt="">' : "") +
+    '<div class="col"><div class="bubble"></div><div class="meta"></div></div>';
+  const bubble = turn.querySelector(".bubble");
+  turn.querySelector(".meta").textContent = (role === "bot" ? "Amadeus · " : "") + clock();
+  if (text === null) {
+    bubble.innerHTML = '<span class="typing" aria-label="Amadeus is typing"><i></i><i></i><i></i></span>';
+  } else {
+    bubble.textContent = text;
+  }
   log.append(turn);
-  log.scrollTop = log.scrollHeight;
-  return body;
+  scrollDown();
+  return bubble;
+}
+
+function fill(bubble, text, isError) {
+  bubble.textContent = text;
+  bubble.classList.add("reveal");
+  if (isError) bubble.closest(".turn").classList.add("error");
+  bubble.nextElementSibling.textContent = "Amadeus · " + clock();
+}
+
+function setStatus(online) {
+  statusEl.className = "status " + (online ? "online" : "offline");
+  statusText.textContent = online ? "Online" : "Offline";
+}
+
+async function ping() {
+  try {
+    setStatus((await fetch("/health", { cache: "no-store" })).ok);
+  } catch {
+    setStatus(false);
+  }
 }
 
 form.onsubmit = async (e) => {
   e.preventDefault();
   const text = msg.value.trim();
-  if (!text) return;
+  if (!text || busy) return;
 
   msg.value = "";
-  send.disabled = true;
-  addTurn("You", text);
-  const pending = addTurn("Amadeus", "…");
+  autoGrow();
+  busy = true;
+  syncSend();
+  document.body.classList.add("thinking");
+  addTurn("user", text);
+  const pending = addTurn("bot", null);
 
   try {
     const r = await fetch("/chat", {
@@ -73,16 +376,52 @@ form.onsubmit = async (e) => {
       body: JSON.stringify({ message: text }),
     });
     if (!r.ok) throw new Error(`server returned ${r.status}`);
-    pending.textContent = (await r.json()).response;
+    fill(pending, (await r.json()).response);
+    setStatus(true);
   } catch (err) {
-    pending.parentElement.className = "turn error";
-    pending.textContent = String(err);
+    fill(pending, String(err), true);
+    ping();
   } finally {
-    send.disabled = false;
-    msg.focus();
-    log.scrollTop = log.scrollHeight;
+    busy = false;
+    syncSend();
+    document.body.classList.remove("thinking");
+    if (!touch) msg.focus();
+    scrollDown();
   }
 };
+
+msg.addEventListener("input", () => { autoGrow(); syncSend(); });
+msg.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing && !touch) {
+    e.preventDefault();
+    form.requestSubmit();
+  }
+});
+
+document.querySelectorAll(".chip").forEach((chip) => {
+  chip.onclick = () => {
+    msg.value = chip.textContent;
+    syncSend();
+    form.requestSubmit();
+  };
+});
+
+// iOS Safari doesn't shrink the layout for the on-screen keyboard, so size the
+// app to the visual viewport instead and keep the latest message in view.
+if (window.visualViewport) {
+  const vv = window.visualViewport;
+  const fit = () => {
+    document.documentElement.style.setProperty("--app-h", vv.height + "px");
+    window.scrollTo(0, 0);
+    scrollDown();
+  };
+  vv.addEventListener("resize", fit);
+  fit();
+}
+
+if (!touch) msg.focus();
+ping();
+setInterval(ping, 30000);
 </script>
 </body>
 </html>
