@@ -18,6 +18,7 @@ source = { editable = "." }
 dependencies = [
     { name = "fastapi", extra = ["standard"] },
     { name = "ollama" },
+    { name = "python-dotenv" },
     { name = "requests" },
 ]
 
@@ -25,6 +26,7 @@ dependencies = [
 requires-dist = [
     { name = "fastapi", extras = ["standard"], specifier = ">=0.141.1" },
     { name = "ollama", specifier = ">=0.6.2" },
+    { name = "python-dotenv", specifier = ">=1.2.3" },
     { name = "requests", specifier = ">=2.34.2" },
 ]
 

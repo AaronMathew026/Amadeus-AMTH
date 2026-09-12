@@ -3,8 +3,10 @@ import os
 import ollama
 from dotenv import load_dotenv
 
-from memory.str_memory import STR_Memory
-from tools.workspace_tool import FUNCTIONS, SCHEMAS
+from .memory.str_memory import STR_Memory
+from .memory.lt_memory import LongTermMemory
+from .tools import memory_tool
+from .tools.workspace_tool import FUNCTIONS, SCHEMAS
 
 load_dotenv()
 
@@ -26,21 +28,6 @@ DEFAULT_SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT") or (
 )
 
 
-def run_tool(name: str, arguments: dict) -> str:
-    """Run one tool call and return the text the model should see.
-
-    Failures come back as text rather than raising: the model gets to read what
-    went wrong and try again, instead of the whole request dying.
-    """
-    function = FUNCTIONS.get(name)
-    if function is None:
-        return f"Error: there is no tool named '{name}'."
-    try:
-        return str(function(**arguments))
-    except Exception as e:  # usually the model passing the wrong arguments
-        return f"Error: {name} failed: {e}"
-
-
 class Amadeus:
     def __init__(
         self,
@@ -51,19 +38,44 @@ class Amadeus:
         self.model = model
         self.client = ollama.AsyncClient()
         self.str_mem = STR_Memory(self.system_prompt)
+        self.lt_mem = LongTermMemory()
+
+        # The tool registry. Workspace tools are plain module-level functions,
+        # so they can be shared; the memory tools are bound to this agent's own
+        # LongTermMemory and have to be built per instance.
+        self.schemas = SCHEMAS + memory_tool.SCHEMAS
+        self.functions = {**FUNCTIONS, **memory_tool.build_functions(self.lt_mem)}
 
     def fetch_STR_memory(self):
         pass
 
+    def run_tool(self, name: str, arguments: dict) -> str:
+        """Run one tool call and return the text the model should see.
+
+        Failures come back as text rather than raising: the model gets to read
+        what went wrong and try again, instead of the whole request dying.
+        """
+        function = self.functions.get(name)
+        if function is None:
+            return f"Error: there is no tool named '{name}'."
+        try:
+            return str(function(**arguments))
+        except Exception as e:  # usually the model passing the wrong arguments
+            return f"Error: {name} failed: {e}"
+
     async def chat(self, user_message: str):  # thinking twin
         """Answer the user, letting the model use the workspace tools as it goes."""
+        context = self.lt_mem.retrieve_memory(user_message)
+        if context:
+            user_message += f"\n\nContext from long-term memory:\n{context}"
         self.str_mem.add_to_memory({"role": "user", "content": user_message})
+
 
         for _ in range(MAX_ITERATIONS):
             response = await self.client.chat(
                 model=self.model,
                 messages=self.str_mem.get_memory(),
-                tools=SCHEMAS,
+                tools=self.schemas,
             )
             message = response.message
 
@@ -80,7 +92,9 @@ class Amadeus:
                     {
                         "role": "tool",
                         "tool_name": call.function.name,
-                        "content": run_tool(call.function.name, call.function.arguments),
+                        "content": self.run_tool(
+                            call.function.name, call.function.arguments
+                        ),
                     }
                 )
 

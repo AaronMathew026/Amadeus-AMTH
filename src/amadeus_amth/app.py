@@ -7,8 +7,8 @@ import contextlib
 from contextlib import asynccontextmanager
 import uvicorn
 from fastapi.middleware.cors import CORSMiddleware
-from agent import Amadeus
-from models import ChatRequest
+from .agent import Amadeus
+from .models import ChatRequest
 
 
 
@@ -59,11 +59,3 @@ async def chat(request: ChatRequest):
 @app.get("/")
 def root():
     return {"message": "Amadeus is operational"}
-
-
-def main() -> None:
-    uvicorn.run("main:app", host="127.0.0.2", port=8000, reload=False)
-
-
-if __name__ == "__main__":
-    main()
