@@ -54,3 +54,6 @@ desktop.ini
 *.log
 *.sqlite3
 *.db
+
+# Local dev client
+chat.html
