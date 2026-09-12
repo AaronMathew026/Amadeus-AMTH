@@ -1,7 +1,7 @@
 [project]
 name = "amadeus-amth"
 version = "0.1.0"
-description = "Add your description here"
+description = "Amadeus - a self-hosted AI assistant with an autonomous file workspace"
 readme = "README.md"
 authors = [
     { name = "AaronMathew026", email = "aaronmathew026@gmail.com" }
@@ -10,6 +10,7 @@ requires-python = ">=3.14"
 dependencies = [
     "fastapi[standard]>=0.141.1",
     "ollama>=0.6.2",
+    "python-dotenv>=1.2.3",
     "requests>=2.34.2",
 ]
 

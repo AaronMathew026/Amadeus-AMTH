@@ -57,3 +57,7 @@ desktop.ini
 
 # Local dev client
 chat.html
+
+# Agent workspace (runtime content, not source)
+workspace/*
+!workspace/.gitkeep

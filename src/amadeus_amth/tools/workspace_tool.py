@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 
 # Anchored to this file, not the cwd, so the paths are the same no matter where
 # the process was launched from — same approach as memory/semantic_memory.py.
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 # Loaded here rather than relying on the caller: engine/client.py imports this
 # package before it calls load_dotenv(), so reading the variable at import time
