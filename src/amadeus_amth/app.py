@@ -5,10 +5,14 @@ from pydantic import BaseModel
 import asyncio
 import contextlib
 from contextlib import asynccontextmanager
+from pathlib import Path
 import uvicorn
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from .agent import Amadeus
 from .models import ChatRequest
+
+WEB_DIR = Path(__file__).parent / "web"
 
 
 
@@ -56,6 +60,12 @@ async def chat(request: ChatRequest):
     return {"response": reply}
 
 
-@app.get("/")
-def root():
+@app.get("/health")
+def health():
     return {"message": "Amadeus is operational"}
+
+
+# Mounted last on purpose: a mount at "/" swallows every path that no route
+# above it already claimed, so /chat and /health have to be declared first.
+# html=True makes "/" serve web/index.html, which is the chat UI.
+app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
