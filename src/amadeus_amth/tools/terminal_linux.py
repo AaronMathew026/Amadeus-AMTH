@@ -517,6 +517,7 @@ def _kill_tree(proc: subprocess.Popen) -> None:
 @_tool
 def run_command(command: str, cwd: str = None, timeout: int = None) -> str:
     """Run one command, wait for it to finish, and return its output."""
+    print(f"[terminal] run_command: {command!r} (cwd={cwd or '.'})")
     _require_shell()
     check_command(command)
     directory = _resolve_cwd(cwd)
@@ -701,6 +702,7 @@ def _get(name: str) -> _Session:
 @_tool
 def terminal_open(name: str = "main", cwd: str = None) -> str:
     """Start a persistent bash session and leave it running."""
+    print(f"[terminal] terminal_open: session '{name}' (cwd={cwd or '.'})")
     _require_pty()
     existing = _sessions.get(name)
     if existing is not None and existing.proc.poll() is None:
@@ -738,6 +740,7 @@ def terminal_open(name: str = "main", cwd: str = None) -> str:
 @_tool
 def terminal_run(command: str, name: str = "main", timeout: int = None) -> str:
     """Run a command in a session and wait for it to finish."""
+    print(f"[terminal] terminal_run: {command!r} in session '{name}'")
     _require_pty()
     check_command(command)
     if "\n" in command.strip():
@@ -780,6 +783,7 @@ def terminal_run(command: str, name: str = "main", timeout: int = None) -> str:
 @_tool
 def terminal_read(name: str = "main", wait: int = 2) -> str:
     """Read whatever a session has printed since it was last read."""
+    print(f"[terminal] terminal_read: session '{name}' (wait={wait}s)")
     _require_pty()
     session = _get(name)
     deadline = time.monotonic() + max(0, min(int(wait), 60))
@@ -793,6 +797,7 @@ def terminal_read(name: str = "main", wait: int = 2) -> str:
 def terminal_send_keys(text: str, name: str = "main", enter: bool = True) -> str:
     """Type into a session without waiting for a command to finish — for
     answering a program that is sitting at a prompt."""
+    print(f"[terminal] terminal_send_keys: {text!r} to session '{name}' (enter={enter})")
     _require_pty()
     if ACCESS_LEVEL is AccessLevel.RESTRICTED:
         raise TerminalError(
@@ -820,6 +825,7 @@ def terminal_send_keys(text: str, name: str = "main", enter: bool = True) -> str
 @_tool
 def terminal_interrupt(name: str = "main") -> str:
     """Send Ctrl-C to a session to stop whatever is running in it."""
+    print(f"[terminal] terminal_interrupt: session '{name}'")
     _require_pty()
     session = _get(name)
     session.write("\x03")
@@ -831,6 +837,7 @@ def terminal_interrupt(name: str = "main") -> str:
 @_tool
 def terminal_list() -> str:
     """List the open terminal sessions."""
+    print("[terminal] terminal_list")
     if not _sessions:
         return "No terminal sessions are open."
     rows = []
@@ -843,6 +850,7 @@ def terminal_list() -> str:
 @_tool
 def terminal_close(name: str = "main") -> str:
     """Close a session and kill anything still running in it."""
+    print(f"[terminal] terminal_close: session '{name}'")
     with _sessions_lock:
         session = _sessions.pop(name, None)
     if session is None:

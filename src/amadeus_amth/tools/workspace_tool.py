@@ -88,6 +88,7 @@ def _safe_path(path: str, *, follow: bool = True) -> Path:
 @_tool
 def read_file(path: str) -> str:
     """Read a file from the workspace and return its contents as a string."""
+    print(f"[workspace] read_file: '{path}'")
     full = _safe_path(path)
     if not full.exists():
         return f"Error: '{full}' does not exist."
@@ -99,6 +100,7 @@ def read_file(path: str) -> str:
 @_tool
 def write_file(path: str, content: str) -> str:
     """Write content to a file in the workspace, creating directories as needed."""
+    print(f"[workspace] write_file: '{path}' ({len(content)} chars)")
     full = _safe_path(path)
     full.parent.mkdir(parents=True, exist_ok=True)
     full.write_text(content, encoding="utf-8")
@@ -110,6 +112,7 @@ def list_files(path: str = ".") -> str:
     """List all files in the given directory, traversing subdirectories recursively,
     and return them as POSIX-style relative paths. Symlinked directories are not
     descended into."""
+    print(f"[workspace] list_files: '{path}'")
     root = _safe_path(path)
     if not root.exists() or not root.is_dir():
         return f"Error: '{path}' is not a valid directory."
@@ -120,6 +123,7 @@ def list_files(path: str = ".") -> str:
 @_tool
 def edit_file(path: str, old_string: str, new_string: str) -> str:
     """Edit a file by replacing old_string with new_string."""
+    print(f"[workspace] edit_file: '{path}'")
     full = _safe_path(path)
     if not full.exists():
         return f"Error: '{full}' does not exist."
@@ -135,6 +139,7 @@ def edit_file(path: str, old_string: str, new_string: str) -> str:
 def delete_file(path: str) -> str:
     """Delete a file, directory or symlink. A symlink is removed itself — the
     tree it points at is left alone."""
+    print(f"[workspace] delete_file: '{path}'")
     full = _safe_path(path, follow=False)
     if not _exists(full):
         return f"Error: '{full}' does not exist."
@@ -150,6 +155,7 @@ def delete_file(path: str) -> str:
 @_tool
 def move_file(source_path: str, destination_path: str) -> str:
     """Move or rename a file, directory or symlink."""
+    print(f"[workspace] move_file: '{source_path}' -> '{destination_path}'")
     src = _safe_path(source_path, follow=False)
     dst = _safe_path(destination_path, follow=False)
     if not _exists(src):
@@ -162,6 +168,7 @@ def move_file(source_path: str, destination_path: str) -> str:
 @_tool
 def read_directory(path: str = ".") -> str:
     """List files and directories in the given directory (non-recursive)."""
+    print(f"[workspace] read_directory: '{path}'")
     root = _safe_path(path)
     if not root.exists() or not root.is_dir():
         return f"Error: '{path}' is not a valid directory."
@@ -176,6 +183,7 @@ def read_directory(path: str = ".") -> str:
 @_tool
 def file_exists(path: str) -> str:
     """Check if a file or directory exists."""
+    print(f"[workspace] file_exists: '{path}'")
     return "True" if _exists(_safe_path(path, follow=False)) else "False"
 
 
@@ -183,6 +191,7 @@ def file_exists(path: str) -> str:
 def search_files(query: str, path: str = ".") -> str:
     """Search for files matching a glob pattern. Symlinked directories are not
     descended into. Matching is case-sensitive on Linux and macOS."""
+    print(f"[workspace] search_files: '{query}' in '{path}'")
     root = _safe_path(path)
     if not root.exists() or not root.is_dir():
         return f"Error: '{path}' is not a valid directory."
@@ -193,6 +202,7 @@ def search_files(query: str, path: str = ".") -> str:
 @_tool
 def create_directory(path: str) -> str:
     """Create a new directory."""
+    print(f"[workspace] create_directory: '{path}'")
     full = _safe_path(path)
     if _exists(full):
         return f"Error: '{full}' already exists."
