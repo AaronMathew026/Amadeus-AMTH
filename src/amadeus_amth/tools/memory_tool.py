@@ -41,6 +41,7 @@ def build_functions(lt_mem: LongTermMemory) -> dict:
 
     @_tool
     def save_memory(text: str) -> str:
+        print(f"[memory] save_memory: {text!r}")
         memory_id = lt_mem.save_memory(text)
         if memory_id is None:
             return "Error: the memory could not be saved (embedding failed)."
@@ -48,6 +49,7 @@ def build_functions(lt_mem: LongTermMemory) -> dict:
 
     @_tool
     def retrieve_memory(query: str, top_k: int = 2) -> str:
+        print(f"[memory] retrieve_memory: {query!r} (top_k={top_k})")
         documents = lt_mem.retrieve_memory(query, top_k=top_k)
         if documents is None:
             return "Error: the memory search failed (embedding failed)."

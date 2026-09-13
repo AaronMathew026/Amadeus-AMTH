@@ -22,8 +22,6 @@ async def heartbeat(agent: Amadeus):
         try:
             await asyncio.sleep(240) # Wake up every 60 seconds - set this up as a configurable parameter later
             print("Heartbeat: Performing housekeeping tasks...")
-            #await agent.str_mem.add_to_memory({"role": "system", "content": agent.system_prompt}) # Add a system message to the memory to keep it alive#
-            await agent.str_mem.add_to_memory({"role": "system", "content": house_keeping_prompt}) # Add a housekeeping message to the memory to keep it alive
             await agent.chat(house_keeping_prompt) # Call the chat function to perform housekeeping tasks - this will allow the model to perform any necessary housekeeping tasks
 
 
