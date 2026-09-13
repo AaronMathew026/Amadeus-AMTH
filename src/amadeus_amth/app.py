@@ -14,14 +14,18 @@ from .models import ChatRequest
 
 WEB_DIR = Path(__file__).parent / "web"
 
-
+house_keeping_prompt =  "This is not a message from the user - this message is a directive for you to perform some autonmous housekeeping tasks - Your goal is do something that would benefit the user - this could be checking the workspace for anything important, scanning earlier conversations for anything important etc."
 
 
 async def heartbeat(agent: Amadeus):
     while True:
         try:
             await asyncio.sleep(240) # Wake up every 60 seconds - set this up as a configurable parameter later
-            agent.str_mem.add_to_memory({"role": "system", "content": agent.system_prompt}) # Add a system message to the memory to keep it alive
+            print("Heartbeat: Performing housekeeping tasks...")
+            #await agent.str_mem.add_to_memory({"role": "system", "content": agent.system_prompt}) # Add a system message to the memory to keep it alive#
+            await agent.str_mem.add_to_memory({"role": "system", "content": house_keeping_prompt}) # Add a housekeeping message to the memory to keep it alive
+            await agent.chat(house_keeping_prompt) # Call the chat function to perform housekeeping tasks - this will allow the model to perform any necessary housekeeping tasks
+
 
             # await is used to ensure we dont block the event loop
             # Fill this in later
