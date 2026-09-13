@@ -61,3 +61,6 @@ chat.html
 # Agent workspace (runtime content, not source)
 workspace/*
 !workspace/.gitkeep
+
+# ChromaDB runtime blobs (semantic memory, machine-local)
+src/amadeus_amth/memory/semantic_memory/
