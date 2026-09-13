@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 
 from .memory.str_memory import STR_Memory
 from .memory.lt_memory import LongTermMemory
-from .tools import memory_tool
+from .tools import memory_tool, terminal_linux
 from .tools.workspace_tool import FUNCTIONS, SCHEMAS
 from datetime import datetime, timedelta
 
@@ -38,15 +38,25 @@ class Amadeus:
     ):
         self.model = model
         self.client = ollama.AsyncClient()
-        self.system_prompt = system_prompt + "\n\n" + startup_message
-        self.str_mem = STR_Memory(self.system_prompt)
+        # describe_access() goes in with the prompt because the terminal access
+        # level is fixed at import time: the model is told what it may run
+        # before it starts guessing and getting refused.
+        self.system_prompt = "\n\n".join(
+            [system_prompt, terminal_linux.describe_access(), startup_message]
+        )
+        self.str_mem = STR_Memory(self.system_prompt, self.model, self.client)
         self.lt_mem = LongTermMemory()
 
-        # The tool registry. Workspace tools are plain module-level functions,
-        # so they can be shared; the memory tools are bound to this agent's own
-        # LongTermMemory and have to be built per instance.
-        self.schemas = SCHEMAS + memory_tool.SCHEMAS
-        self.functions = {**FUNCTIONS, **memory_tool.build_functions(self.lt_mem)}
+        # The tool registry. Workspace and terminal tools are plain
+        # module-level functions, so they can be shared; the memory tools are
+        # bound to this agent's own LongTermMemory and have to be built per
+        # instance.
+        self.schemas = SCHEMAS + memory_tool.SCHEMAS + terminal_linux.SCHEMAS
+        self.functions = {
+            **FUNCTIONS,
+            **terminal_linux.FUNCTIONS,
+            **memory_tool.build_functions(self.lt_mem),
+        }
 
     def fetch_STR_memory(self):
         pass
@@ -71,7 +81,7 @@ class Amadeus:
         context = self.lt_mem.retrieve_memory(user_message)
         if context:
             user_message += f"\n\nContext from long-term memory:\n{context}"
-        self.str_mem.add_to_memory({"role": "user", "content": f"[{timestamp}] {user_message}"})
+        await self.str_mem.add_to_memory({"role": "user", "content": f"[{timestamp}] {user_message}"})
 
 
         for _ in range(MAX_ITERATIONS):
@@ -85,14 +95,14 @@ class Amadeus:
 
             # The model's turn is remembered either way, so that on the next
             # pass it can see the tool calls it just asked for.
-            self.str_mem.add_to_memory(message.model_dump(exclude_none=True))
+            await self.str_mem.add_to_memory(message.model_dump(exclude_none=True))
 
             # No tool calls means this is the actual reply to the user.
             if not message.tool_calls:
                 return message.content
 
             for call in message.tool_calls:
-                self.str_mem.add_to_memory(
+                await self.str_mem.add_to_memory(
                     {
                         "role": "tool",
                         "tool_name": call.function.name,
