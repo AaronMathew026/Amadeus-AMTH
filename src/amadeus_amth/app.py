@@ -20,7 +20,7 @@ house_keeping_prompt =  "This is not a message from the user - this message is a
 async def heartbeat(agent: Amadeus):
     while True:
         try:
-            await asyncio.sleep(600) # Wake up every 60 seconds - set this up as a configurable parameter later
+            await asyncio.sleep(3600) # Wake up every 3600 seconds (hourly beat) - set this up as a configurable parameter later
             print("Heartbeat: Performing housekeeping tasks...")
             await agent.chat(house_keeping_prompt) # Call the chat function to perform housekeeping tasks - this will allow the model to perform any necessary housekeeping tasks
 
