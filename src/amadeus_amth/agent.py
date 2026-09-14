@@ -1,3 +1,4 @@
+import asyncio
 import os
 
 import ollama
@@ -102,13 +103,17 @@ class Amadeus:
                 return message.content
 
             for call in message.tool_calls:
+                # Tools block on shells, pty waits and file IO — run them in a
+                # worker thread so /chat and /health keep answering while a
+                # long command runs, instead of stalling the event loop.
+                content = await asyncio.to_thread(
+                    self.run_tool, call.function.name, call.function.arguments
+                )
                 await self.str_mem.add_to_memory(
                     {
                         "role": "tool",
                         "tool_name": call.function.name,
-                        "content": self.run_tool(
-                            call.function.name, call.function.arguments
-                        ),
+                        "content": content,
                     }
                 )
 
