@@ -29,10 +29,10 @@ class STR_Memory():
 
 
     async def condense_memory(self):
-        # Index 0 (system prompt) and 1 (first message) survive clear_memory,
-        # so only what comes after them needs summarising.
+        # Only the system prompt (index 0) survives clear_memory, so everything
+        # after it belongs in the summary.
         transcript = "\n".join(
-            f"{m.get('role')}: {m.get('content', '')}" for m in self.memory[2:]
+            f"{m.get('role')}: {m.get('content', '')}" for m in self.memory[1:]
         )
         try:
             response = await self.client.chat(
@@ -56,4 +56,9 @@ class STR_Memory():
 
 
     def clear_memory(self):
-        del self.memory[2:]  # doesnt delete the system prompt or the first message
+        # Keep only the system prompt. The old version also pinned the first
+        # user message, so the conversation opener sat at index 1 forever and
+        # was replayed into every context window after each condense cycle —
+        # the repeating "ghost" messages of the 2026-09-13 night watch. The
+        # first message is summarised with everything else now.
+        del self.memory[1:]
