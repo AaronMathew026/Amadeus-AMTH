@@ -1,4 +1,6 @@
 
+import asyncio
+
 import ollama
 
 CONDENSE_PROMPT = (
@@ -15,24 +17,37 @@ class STR_Memory():
         self.max_memory_size = 30
         self.model = model
         self.client = client or ollama.AsyncClient()
+        # Serializes add_to_memory's check/condense/append: two concurrent
+        # chats (a real /chat plus the hourly heartbeat beat) must not both
+        # trigger condense_memory, and nothing may append while a condense's
+        # Ollama round-trip is in flight.
+        # See shared/reports/memory_race_fix_guide.md.
+        self._lock = asyncio.Lock()
         self.memory = []
         self.memory.append({"role": "system", "content": sys_prompt})
 
 
     async def add_to_memory(self, message: dict):
-        if len(self.memory) >= self.max_memory_size:
-            await self.condense_memory()
-        self.memory.append(message)
+        async with self._lock:
+            if len(self.memory) >= self.max_memory_size:
+                await self.condense_memory()
+            self.memory.append(message)
 
     def get_memory(self):
-        return self.memory
+        # Copy, not reference: stops a concurrent append from landing inside
+        # another request's context mid-serialization.
+        return list(self.memory)
 
 
     async def condense_memory(self):
-        # Only the system prompt (index 0) survives clear_memory, so everything
-        # after it belongs in the summary.
+        # Snapshot BEFORE the await: summarize exactly this slice. With
+        # add_to_memory holding the lock this equals the old clear_memory()
+        # wipe, but the invariant now lives here instead of trusting every
+        # caller — and a lock-bypassing late arrival would land AFTER the
+        # summary instead of being deleted unseen.
+        snapshot = self.memory[1:]
         transcript = "\n".join(
-            f"{m.get('role')}: {m.get('content', '')}" for m in self.memory[1:]
+            f"{m.get('role')}: {m.get('content', '')}" for m in snapshot
         )
         try:
             response = await self.client.chat(
@@ -48,14 +63,18 @@ class STR_Memory():
             print(f"Condense memory error: {e}")
             summary = None
 
-        self.clear_memory()
+        # Delete ONLY the slice that was summarized — never anything
+        # appended while the Ollama round-trip was in flight.
+        del self.memory[1 : 1 + len(snapshot)]
         if summary:
-            self.memory.append(
-                {"role": "system", "content": f"Summary of the earlier conversation:\n{summary}"}
+            self.memory.insert(
+                1,
+                {"role": "system", "content": f"Summary of the earlier conversation:\n{summary}"},
             )
 
 
     def clear_memory(self):
+        # Manual-reset utility; condense_memory now slice-deletes instead.
         # Keep only the system prompt. The old version also pinned the first
         # user message, so the conversation opener sat at index 1 forever and
         # was replayed into every context window after each condense cycle —
