@@ -317,7 +317,7 @@ function autoGrow() {
 }
 
 // Returns the bubble so a pending turn can be filled in once the reply lands.
-function addTurn(role, text) {
+function addTurn(role, text, time = clock()) {
   document.body.classList.add("started");
   const turn = document.createElement("div");
   turn.className = `turn ${role}`;
@@ -325,7 +325,7 @@ function addTurn(role, text) {
     (role === "bot" ? '<img class="avatar" src="icon.svg" alt="">' : "") +
     '<div class="col"><div class="bubble"></div><div class="meta"></div></div>';
   const bubble = turn.querySelector(".bubble");
-  turn.querySelector(".meta").textContent = (role === "bot" ? "Amadeus · " : "") + clock();
+  turn.querySelector(".meta").textContent = (role === "bot" ? "Amadeus · " : "") + time;
   if (text === null) {
     bubble.innerHTML = '<span class="typing" aria-label="Amadeus is typing"><i></i><i></i><i></i></span>';
   } else {
@@ -353,6 +353,17 @@ async function ping() {
     setStatus((await fetch("/health", { cache: "no-store" })).ok);
   } catch {
     setStatus(false);
+  }
+}
+
+// Replays today's conversation from the server's daily chat log.
+async function loadHistory() {
+  try {
+    const r = await fetch("/history", { cache: "no-store" });
+    if (!r.ok) return;
+    for (const t of (await r.json()).turns) addTurn(t.role, t.text, t.time);
+  } catch {
+    // Offline: start with an empty log; ping() shows the status.
   }
 }
 
@@ -420,6 +431,7 @@ if (window.visualViewport) {
 }
 
 if (!touch) msg.focus();
+loadHistory();
 ping();
 setInterval(ping, 30000);
 </script>
