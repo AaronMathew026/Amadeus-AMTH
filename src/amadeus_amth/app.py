@@ -57,7 +57,12 @@ async def heartbeat(agent: Amadeus):
         try:
             await asyncio.sleep(3600) # Wake up every 3600 seconds (hourly beat) - set this up as a configurable parameter later
             print("Heartbeat: Performing housekeeping tasks...")
-            await agent.chat(house_keeping_prompt) # Call the chat function to perform housekeeping tasks - this will allow the model to perform any necessary housekeeping tasks
+            # Heartbeats never pass through the /chat endpoint, so without an
+            # explicit append_log their turns vanish from the chat log (the
+            # missing 08:29 sweep entry of 2026-09-15). Log the reply, marked
+            # so it is never mistaken for a user-facing answer.
+            reply = await agent.chat(house_keeping_prompt)
+            append_log("Amadeus", f"(housekeeping beat) {reply}")
 
 
             # await is used to ensure we dont block the event loop

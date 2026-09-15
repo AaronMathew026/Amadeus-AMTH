@@ -76,6 +76,50 @@ class Amadeus:
         except Exception as e:  # usually the model passing the wrong arguments
             return f"Error: {name} failed: {e}"
 
+    # glm-family thinking models occasionally spend their wrap-up turn on
+    # reasoning and return an empty content field — the 2026-09-15 empty
+    # replies (POST /chat 200 OK, nothing rendered). Recovery ladder: one
+    # retry with an explicit answer-as-content nudge, then the last
+    # non-empty assistant turn on record, then a spoken last resort.
+    # Never ship an empty string.
+    EMPTY_REPLY_NUDGE = (
+        "Your previous response arrived with no message content. Reply now "
+        "with your final answer as plain message content — no tool calls, "
+        "no hidden reasoning."
+    )
+
+    async def _finalize_reply(self, message) -> str:
+        """Turn the model's final (tool-free) turn into the text the user sees."""
+        content = message.content or ""
+        if content.strip():
+            return content
+
+        thinking = getattr(message, "thinking", None) or ""
+        print(
+            f"[agent] Empty model reply — content empty, thinking={len(thinking)} chars. "
+            f"Head: {thinking[:300]!r}"
+        )
+        print("[agent] Retrying once with an explicit answer-as-content nudge.")
+
+        response = await self.client.chat(
+            model=self.model,
+            messages=self.str_mem.get_memory()
+            + [{"role": "user", "content": self.EMPTY_REPLY_NUDGE}],
+        )
+        retried = response.message.content or ""
+        if retried.strip():
+            print("[agent] Retry recovered the reply.")
+            return retried
+
+        print("[agent] Retry also empty — falling back to last non-empty assistant turn.")
+        for past in reversed(self.str_mem.get_memory()):
+            if past.get("role") == "assistant" and (past.get("content") or "").strip():
+                return past["content"]
+        return (
+            "(My model returned an empty reply twice and I had nothing usable on "
+            "record — please send that again.)"
+        )
+
     async def chat(self, user_message: str):  # thinking twin
         timestamp = str(datetime.now())
         """Answer the user, letting the model use the workspace tools as it goes."""
@@ -92,15 +136,20 @@ class Amadeus:
                 tools=self.schemas,
             )
             message = response.message
-        
 
-            # The model's turn is remembered either way, so that on the next
-            # pass it can see the tool calls it just asked for.
-            await self.str_mem.add_to_memory(message.model_dump(exclude_none=True))
 
             # No tool calls means this is the actual reply to the user.
             if not message.tool_calls:
-                return message.content
+                reply = await self._finalize_reply(message)
+                # Store what the user actually received instead of the raw
+                # model turn, so an empty wrap-up turn never reaches the
+                # context window and the record matches the chat log.
+                await self.str_mem.add_to_memory({"role": "assistant", "content": reply})
+                return reply
+
+            # The model's turn is remembered so that on the next pass it can
+            # see the tool calls it just asked for.
+            await self.str_mem.add_to_memory(message.model_dump(exclude_none=True))
 
             for call in message.tool_calls:
                 # Tools block on shells, pty waits and file IO — run them in a
