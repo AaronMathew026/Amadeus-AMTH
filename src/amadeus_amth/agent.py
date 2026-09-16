@@ -14,8 +14,15 @@ load_dotenv()
 
 # One iteration is one model turn: the model either answers — and we are done —
 # or it asks for tools, we run them, and it gets another turn with the results.
-# The cap is what stops a model that keeps calling tools forever.
-MAX_ITERATIONS = 10
+# The cap is what stops a model that keeps calling tools forever. It is a
+# default rather than a constant because the settings panel can raise or lower
+# it at runtime; self.max_iterations is the value actually used.
+DEFAULT_MAX_ITERATIONS = int(os.getenv("MAX_ITERATIONS") or 20)
+
+# Bounds for the settings endpoint. Below 1 the chat loop can never answer; the
+# ceiling just stops a typo from letting a looping model run all day.
+MIN_ITERATIONS = 1
+MAX_ITERATIONS_LIMIT = 100
 
 # Defaults live in .env (BASE_MODEL, SYSTEM_PROMPT) so they can be changed
 # without touching the code; the literals below are the fallback.
@@ -29,6 +36,15 @@ DEFAULT_SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT") or (
     "informative, and engaging for the user."
 )
 
+# What the hourly heartbeat sends itself. Editable from the settings panel;
+# reset_housekeeping_prompt() puts this value back.
+DEFAULT_HOUSEKEEPING_PROMPT = os.getenv("HOUSEKEEPING_PROMPT") or (
+    "This is not a message from the user - this message is a directive for you "
+    "to perform some autonmous housekeeping tasks - Your goal is do something "
+    "that would benefit the user - this could be checking the workspace for "
+    "anything important, scanning earlier conversations for anything important etc."
+)
+
 
 class Amadeus:
     def __init__(
@@ -36,9 +52,12 @@ class Amadeus:
         model: str = DEFAULT_MODEL,
         system_prompt: str = DEFAULT_SYSTEM_PROMPT,
         startup_message: str = "Your main server is running. This may the first time you have been launched. On the next user message check  for the Following files. IDENTITY.md,SOUL.md,USER.md, once the user sends their message, check if these files exist, if they do, continue as if you already know them. If these files are mssing, promptly ask them for the information required to fill the files in. THIS IS A CRITICAL MESSAGE, DO NOT FORGET IT.",
+
     ):
         self.model = model
         self.client = ollama.AsyncClient()
+        self.max_iterations = DEFAULT_MAX_ITERATIONS
+        self.housekeeping_prompt = DEFAULT_HOUSEKEEPING_PROMPT
         # describe_access() goes in with the prompt because the terminal access
         # level is fixed at import time: the model is told what it may run
         # before it starts guessing and getting refused.
@@ -61,6 +80,25 @@ class Amadeus:
 
     def fetch_STR_memory(self):
         pass
+    def change_iterations(self, new_iterations: int) -> int:
+        """Change the maximum number of iterations for the chat loop."""
+        self.max_iterations = new_iterations
+        return self.max_iterations
+
+    def change_housekeeping_prompt(self, new_prompt: str) -> str:
+        """Replace the directive the heartbeat sends itself each beat.
+
+        The change lands on the next beat — a sweep already in flight finishes
+        on the prompt it started with. Like the iteration cap this lives in
+        memory only, so a restart goes back to DEFAULT_HOUSEKEEPING_PROMPT.
+        """
+        self.housekeeping_prompt = new_prompt.strip()
+        return self.housekeeping_prompt
+
+    def reset_housekeeping_prompt(self) -> str:
+        """Put the shipped housekeeping directive back."""
+        self.housekeeping_prompt = DEFAULT_HOUSEKEEPING_PROMPT
+        return self.housekeeping_prompt
 
     def run_tool(self, name: str, arguments: dict) -> str:
         """Run one tool call and return the text the model should see.
@@ -129,7 +167,7 @@ class Amadeus:
         await self.str_mem.add_to_memory({"role": "user", "content": f"[{timestamp}] {user_message}"})
 
 
-        for _ in range(MAX_ITERATIONS):
+        for _ in range(self.max_iterations):
             response = await self.client.chat(
                 model=self.model,
                 messages=self.str_mem.get_memory(),
@@ -167,6 +205,6 @@ class Amadeus:
                 )
 
         return (
-            f"Stopped after {MAX_ITERATIONS} rounds of tool calls without reaching "
-            f"an answer."
+            f"Stopped after {self.max_iterations} rounds of tool calls without "
+            f"reaching an answer."
         )
