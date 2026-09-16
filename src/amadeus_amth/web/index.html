@@ -101,6 +101,185 @@
   }
   .status.offline i { background: var(--danger); }
 
+  .icon-btn {
+    width: 38px; height: 38px; flex: none; display: grid; place-items: center;
+    border: 1px solid var(--border); border-radius: 12px; cursor: pointer;
+    background: var(--surface); color: var(--muted);
+    transition: color .2s, border-color .2s, background .2s, transform .3s var(--ease);
+  }
+  .icon-btn svg { width: 19px; height: 19px; }
+  .icon-btn:hover { color: var(--text); border-color: var(--border-hi); background: var(--surface-hi); }
+  .icon-btn:active { transform: scale(.92); }
+  #settings-btn { margin-left: auto; }
+  #settings-btn:hover svg { transform: rotate(45deg); }
+  #settings-btn svg { transition: transform .4s var(--ease); }
+
+  /* ---- settings drawer ---- */
+  .scrim {
+    position: fixed; inset: 0; z-index: 20;
+    background: rgba(6, 4, 12, .6);
+    backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
+    opacity: 0; transition: opacity .3s;
+  }
+  .panel {
+    position: fixed; z-index: 21; top: 0; right: 0; bottom: 0;
+    width: min(440px, 100%);
+    display: flex; flex-direction: column;
+    background: rgba(18, 13, 30, .92);
+    backdrop-filter: blur(20px) saturate(140%); -webkit-backdrop-filter: blur(20px) saturate(140%);
+    border-left: 1px solid var(--border);
+    box-shadow: -24px 0 60px -20px rgba(0, 0, 0, .8);
+    transform: translateX(100%); transition: transform .35s var(--ease);
+  }
+  /* [hidden] stays until the closing transition ends, so the drawer slides out
+     instead of vanishing; .open drives both the slide and the fade. */
+  .scrim[hidden], .panel[hidden] { display: none; }
+  body.settings-open .scrim { opacity: 1; }
+  body.settings-open .panel { transform: none; }
+
+  .panel-head {
+    display: flex; align-items: center; gap: 12px;
+    padding: calc(14px + env(safe-area-inset-top)) 16px 14px;
+    border-bottom: 1px solid var(--border);
+  }
+  .panel-head h2 { margin: 0; font-size: 16px; font-weight: 650; flex: 1; }
+  .panel-body {
+    flex: 1; overflow-y: auto; padding: 20px 16px;
+    display: flex; flex-direction: column; gap: 26px;
+    scrollbar-width: thin; scrollbar-color: rgba(167, 139, 250, .25) transparent;
+  }
+  .panel-body::-webkit-scrollbar { width: 8px; }
+  .panel-body::-webkit-scrollbar-thumb { background: rgba(167, 139, 250, .22); border-radius: 8px; }
+
+  .field { display: flex; flex-direction: column; gap: 8px; }
+  .field > label { font-size: 13px; font-weight: 600; letter-spacing: .02em; }
+  .field .help { margin: -4px 0 2px; font-size: 12px; color: var(--muted); line-height: 1.5; }
+  .field .row { display: flex; align-items: center; gap: 10px; }
+
+  .panel input[type="number"], .panel textarea {
+    background: rgba(11, 8, 18, .6); color: var(--text);
+    border: 1px solid var(--border); border-radius: 12px;
+    padding: 10px 12px; font: inherit; font-size: 15px; outline: 0;
+    transition: border-color .2s, box-shadow .2s;
+  }
+  .panel input[type="number"] { width: 84px; text-align: center; }
+  .panel textarea { resize: vertical; min-height: 150px; line-height: 1.55; font-size: 14px; }
+  .panel input:focus, .panel textarea:focus {
+    border-color: var(--border-hi); box-shadow: 0 0 0 3px rgba(168, 85, 247, .14);
+  }
+
+  .panel input[type="range"] {
+    flex: 1; min-width: 0; height: 4px; -webkit-appearance: none; appearance: none;
+    border-radius: 999px; background: rgba(167, 139, 250, .22); outline: 0; cursor: pointer;
+  }
+  .panel input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%;
+    background: var(--accent-grad); box-shadow: 0 2px 10px -2px rgba(139, 92, 246, .9);
+  }
+  .panel input[type="range"]::-moz-range-thumb {
+    width: 18px; height: 18px; border: 0; border-radius: 50%; background: #a78bfa;
+  }
+
+  .btn {
+    padding: 9px 16px; border-radius: 12px; border: 1px solid transparent;
+    font: inherit; font-size: 14px; font-weight: 550; cursor: pointer; color: #fff;
+    transition: filter .2s, transform .15s var(--ease), opacity .2s, background .2s, border-color .2s;
+  }
+  .btn.primary { background: var(--accent-grad); box-shadow: 0 4px 16px -6px rgba(139, 92, 246, .9); }
+  .btn.ghost { background: transparent; border-color: var(--border); color: var(--muted); }
+  .btn.ghost:hover:not(:disabled) { border-color: var(--border-hi); color: var(--text); background: var(--surface); }
+  .btn.primary:hover:not(:disabled) { filter: brightness(1.1); }
+  .btn:active:not(:disabled) { transform: scale(.96); }
+  .btn:disabled { opacity: .35; cursor: default; box-shadow: none; }
+  .field .row.btns { gap: 8px; margin-top: 2px; }
+
+  .note {
+    margin: 0; font-size: 12px; min-height: 16px;
+    color: var(--muted); opacity: 0; transition: opacity .25s;
+  }
+  .note.show { opacity: 1; }
+  .note.ok { color: var(--ok); }
+  .note.bad { color: var(--danger); }
+
+  .panel-foot {
+    padding: 12px 16px calc(14px + env(safe-area-inset-bottom));
+    border-top: 1px solid var(--border);
+    font-size: 11px; color: var(--muted); opacity: .75; line-height: 1.5;
+  }
+
+  /* ---- danger zone ----
+     The self destruct button is pure theatre: it arms, counts down, shakes the
+     room and then thinks better of it. Nothing is sent to the server. */
+  .danger-zone { padding-top: 22px; border-top: 1px dashed rgba(251, 113, 133, .35); }
+  .danger-zone > label { color: #fda4af; letter-spacing: .06em; text-transform: uppercase; }
+
+  .sd-wrap { position: relative; }
+  .self-destruct {
+    position: relative; width: 100%;
+    display: flex; flex-direction: column; align-items: center; gap: 14px;
+    padding: 18px 16px 16px; border-radius: 18px;
+    border: 2px solid rgba(254, 205, 211, .85);
+    background:
+      repeating-linear-gradient(45deg, rgba(0, 0, 0, .3) 0 12px, transparent 12px 24px),
+      radial-gradient(130% 120% at 50% -10%, #f87171 0%, #dc2626 45%, #7f1d1d 100%);
+    color: #fff; font: inherit; font-size: 19px; font-weight: 800;
+    letter-spacing: .2em; text-transform: uppercase;
+    text-shadow: 0 2px 8px rgba(0, 0, 0, .65);
+    cursor: pointer; animation: menace 2.4s ease-in-out infinite;
+    transition: transform .15s var(--ease), filter .2s, border-color .2s;
+  }
+  .self-destruct:hover:not(:disabled) { filter: brightness(1.08) saturate(1.12); }
+  .self-destruct:active:not(:disabled) { transform: scale(.975); }
+  /* keep the GIF glued to the button while it presses in */
+  .self-destruct:active:not(:disabled) ~ .sd-gif { transform: translateX(-50%) scale(.975); }
+  .self-destruct:focus-visible { outline: 3px solid #fecdd3; outline-offset: 3px; }
+  .self-destruct:disabled { cursor: default; }
+  .self-destruct.armed { border-color: #fff; animation-duration: .55s; }
+  .sd-slot { display: block; width: 132px; height: 140px; }
+  .sd-text { line-height: 1.2; }
+
+  @keyframes menace {
+    0%, 100% { box-shadow: 0 10px 28px -10px rgba(220, 38, 38, .75), inset 0 2px 0 rgba(255, 255, 255, .3), inset 0 -10px 22px rgba(0, 0, 0, .5); }
+    50% { box-shadow: 0 12px 48px -6px rgba(248, 113, 113, .95), inset 0 2px 0 rgba(255, 255, 255, .45), inset 0 -10px 22px rgba(0, 0, 0, .5); }
+  }
+
+  /* The GIF rides on top of the button (pointer-events: none) instead of inside
+     it, because a <button> may not contain an iframe. */
+  .sd-gif {
+    position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
+    width: 132px; height: 140px; pointer-events: none;
+    border-radius: 14px; overflow: hidden;
+    border: 2px solid rgba(255, 255, 255, .6); background: #200606;
+    box-shadow: 0 8px 20px rgba(0, 0, 0, .6);
+    transition: transform .15s var(--ease);
+  }
+  .sd-gif iframe {
+    position: absolute; top: 0; left: 0; width: 100%;
+    /* taller than the frame so Tenor's attribution strip is cropped away */
+    height: calc(100% + 46px); border: 0;
+  }
+  .sd-gif::after {
+    content: "☢"; position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 54px; color: #fecdd3;
+  }
+  .sd-gif.loaded::after { display: none; }
+
+  /* detonation */
+  @keyframes shake {
+    10%, 90% { transform: translate3d(-2px, 1px, 0) rotate(-.4deg); }
+    20%, 80% { transform: translate3d(5px, -3px, 0) rotate(.6deg); }
+    30%, 50%, 70% { transform: translate3d(-8px, 2px, 0) rotate(-.8deg); }
+    40%, 60% { transform: translate3d(8px, -2px, 0) rotate(.8deg); }
+  }
+  @keyframes boom { from { opacity: 1; } to { opacity: 0; } }
+  body.detonating { animation: shake .55s cubic-bezier(.36, .07, .19, .97) both; }
+  body.detonating::after {
+    content: ""; position: fixed; inset: 0; z-index: 99; pointer-events: none;
+    background: radial-gradient(60% 60% at 50% 50%, rgba(255, 237, 213, .95), rgba(220, 38, 38, .75) 45%, rgba(127, 29, 29, 0) 100%);
+    animation: boom .8s ease-out both;
+  }
+
   /* ---- conversation ---- */
   #log {
     flex: 1; overflow-y: auto; overscroll-behavior: contain;
@@ -249,12 +428,16 @@
     .bar { padding-left: 16px; }
     .hint { display: none; }
     .ambient span { opacity: .4; }
+    .icon-btn { width: 34px; height: 34px; border-radius: 10px; }
+    .panel { width: 100%; border-left: 0; }
+    .panel-body { padding: 16px; gap: 22px; }
   }
   @media (hover: none) { .hint { display: none; } }
 
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
     #log { scroll-behavior: auto; }
+    .panel { transition: none; }
   }
 </style>
 </head>
@@ -267,7 +450,63 @@
       <h1>Amadeus</h1>
       <div class="status" id="status"><i></i><span id="status-text">Connecting…</span></div>
     </div>
+    <button type="button" class="icon-btn" id="settings-btn" aria-label="Settings" aria-haspopup="dialog" aria-expanded="false">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1.08-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+    </button>
   </header>
+
+  <div class="scrim" id="scrim" hidden></div>
+  <aside class="panel" id="panel" role="dialog" aria-modal="true" aria-labelledby="panel-title" hidden>
+    <div class="panel-head">
+      <h2 id="panel-title">Settings</h2>
+      <button type="button" class="icon-btn" id="panel-close" aria-label="Close settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+
+    <div class="panel-body">
+      <section class="field">
+        <label for="iter-num">Max iterations</label>
+        <p class="help">How many rounds of tool calls Amadeus may take on one message before it has to stop and answer.</p>
+        <div class="row">
+          <input type="range" id="iter-range" min="1" max="100" step="1" aria-label="Max iterations">
+          <input type="number" id="iter-num" min="1" max="100" step="1" inputmode="numeric">
+        </div>
+        <div class="row btns">
+          <button type="button" class="btn primary" id="save-iter" disabled>Save</button>
+        </div>
+        <p class="note" id="iter-note" role="status"></p>
+      </section>
+
+      <section class="field">
+        <label for="hk-prompt">Housekeeping prompt</label>
+        <p class="help">The directive Amadeus sends itself on each hourly beat. Takes effect on the next beat.</p>
+        <textarea id="hk-prompt" rows="8" spellcheck="false"></textarea>
+        <div class="row btns">
+          <button type="button" class="btn primary" id="save-hk" disabled>Save</button>
+          <button type="button" class="btn ghost" id="reset-hk" disabled>Reset to default</button>
+        </div>
+        <p class="note" id="hk-note" role="status"></p>
+      </section>
+
+      <section class="field danger-zone">
+        <label id="sd-label">Danger zone</label>
+        <p class="help">Irreversible. Catastrophic. Absolutely not to be pressed by anyone, for any reason, ever.</p>
+        <div class="sd-wrap">
+          <button type="button" class="self-destruct" id="self-destruct" aria-labelledby="sd-label sd-text" aria-describedby="sd-note">
+            <span class="sd-slot" aria-hidden="true"></span>
+            <span class="sd-text" id="sd-text">Self destruct</span>
+          </button>
+          <div class="sd-gif" id="sd-gif" aria-hidden="true">
+            <iframe src="https://tenor.com/embed/143982391907906686" title="" scrolling="no" loading="lazy" tabindex="-1"></iframe>
+          </div>
+        </div>
+        <p class="note" id="sd-note" role="status"></p>
+      </section>
+    </div>
+
+    <p class="panel-foot">Settings apply to the running server and go back to their defaults when it restarts.</p>
+  </aside>
 
   <main id="log" aria-live="polite">
     <div class="empty" id="empty">
@@ -396,7 +635,7 @@ form.onsubmit = async (e) => {
     busy = false;
     syncSend();
     document.body.classList.remove("thinking");
-    if (!touch) msg.focus();
+    if (!touch && !document.body.classList.contains("settings-open")) msg.focus();
     scrollDown();
   }
 };
@@ -416,6 +655,199 @@ document.querySelectorAll(".chip").forEach((chip) => {
     form.requestSubmit();
   };
 });
+
+/* ---------------- settings drawer ---------------- */
+const panel = document.getElementById("panel");
+const scrim = document.getElementById("scrim");
+const settingsBtn = document.getElementById("settings-btn");
+const panelClose = document.getElementById("panel-close");
+const iterRange = document.getElementById("iter-range");
+const iterNum = document.getElementById("iter-num");
+const saveIter = document.getElementById("save-iter");
+const iterNote = document.getElementById("iter-note");
+const hkPrompt = document.getElementById("hk-prompt");
+const saveHk = document.getElementById("save-hk");
+const resetHk = document.getElementById("reset-hk");
+const hkNote = document.getElementById("hk-note");
+
+// Last state the server confirmed. Every field compares against this to decide
+// whether it is dirty, so Save only lights up when there is a real change.
+let settings = null;
+
+function note(el, text, kind) {
+  el.textContent = text;
+  el.className = "note show " + (kind || "");
+  if (kind === "ok") {
+    clearTimeout(el._t);
+    el._t = setTimeout(() => el.classList.remove("show"), 2600);
+  }
+}
+
+function iterValue() {
+  const n = parseInt(iterNum.value, 10);
+  if (!Number.isFinite(n)) return null;
+  const lo = parseInt(iterNum.min, 10), hi = parseInt(iterNum.max, 10);
+  return n < lo || n > hi ? null : n;
+}
+
+function syncPanel() {
+  const n = iterValue();
+  saveIter.disabled = n === null || !settings || n === settings.max_iterations;
+  const prompt = hkPrompt.value.trim();
+  saveHk.disabled = !prompt || !settings || prompt === settings.housekeeping_prompt;
+  // Nothing to reset to when the prompt on the server is already the default.
+  resetHk.disabled = !settings || settings.housekeeping_prompt_is_default;
+}
+
+// Fields the user is midway through editing keep their text; everything else
+// takes the server's value.
+function applySettings(data) {
+  const iterDirty = settings && iterValue() !== settings.max_iterations;
+  const hkDirty = settings && hkPrompt.value.trim() !== settings.housekeeping_prompt;
+  settings = data;
+
+  iterNum.min = iterRange.min = data.min_iterations;
+  iterNum.max = iterRange.max = data.max_iterations_limit;
+  if (!iterDirty) iterNum.value = iterRange.value = data.max_iterations;
+  if (!hkDirty) hkPrompt.value = data.housekeeping_prompt;
+  syncPanel();
+}
+
+async function settingsRequest(path, body) {
+  const r = await fetch(path, {
+    method: body === undefined ? "GET" : "POST",
+    cache: "no-store",
+    headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(`server returned ${r.status}`);
+  applySettings(await r.json());
+}
+
+function openSettings() {
+  panel.hidden = scrim.hidden = false;
+  settingsBtn.setAttribute("aria-expanded", "true");
+  // Next frame, so the browser paints the off-screen position first and the
+  // drawer actually slides in rather than appearing.
+  requestAnimationFrame(() => document.body.classList.add("settings-open"));
+  settingsRequest("/settings").catch((err) => note(iterNote, String(err), "bad"));
+  panelClose.focus();
+}
+
+function closeSettings() {
+  sdDisarm();
+  document.body.classList.remove("settings-open");
+  settingsBtn.setAttribute("aria-expanded", "false");
+  // Hide only once it has slid back out, so it isn't yanked off screen.
+  setTimeout(() => {
+    if (!document.body.classList.contains("settings-open")) panel.hidden = scrim.hidden = true;
+  }, 350);
+  settingsBtn.focus();
+}
+
+settingsBtn.onclick = openSettings;
+panelClose.onclick = closeSettings;
+scrim.onclick = closeSettings;
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && document.body.classList.contains("settings-open")) closeSettings();
+});
+
+iterRange.addEventListener("input", () => { iterNum.value = iterRange.value; syncPanel(); });
+iterNum.addEventListener("input", () => {
+  const n = iterValue();
+  if (n !== null) iterRange.value = n;
+  syncPanel();
+});
+hkPrompt.addEventListener("input", syncPanel);
+
+async function withButton(button, noteEl, work, okText) {
+  button.disabled = true;
+  try {
+    await work();
+    note(noteEl, okText, "ok");
+  } catch (err) {
+    note(noteEl, String(err), "bad");
+  } finally {
+    syncPanel();
+  }
+}
+
+saveIter.onclick = () => {
+  const n = iterValue();
+  if (n === null) return note(iterNote, "Pick a whole number in range.", "bad");
+  withButton(saveIter, iterNote, () =>
+    settingsRequest("/settings/max-iterations", { max_iterations: n }),
+    `Saved — up to ${n} round${n === 1 ? "" : "s"} per message.`);
+};
+
+saveHk.onclick = () =>
+  withButton(saveHk, hkNote, () =>
+    settingsRequest("/settings/housekeeping-prompt", { prompt: hkPrompt.value.trim() }),
+    "Saved — it applies from the next beat.");
+
+resetHk.onclick = () =>
+  withButton(resetHk, hkNote, async () => {
+    // Clear the dirty flag first, so the restored default lands in the box
+    // instead of being kept out by the text being replaced.
+    hkPrompt.value = settings ? settings.housekeeping_prompt : hkPrompt.value;
+    await settingsRequest("/settings/housekeeping-prompt/reset");
+  }, "Housekeeping prompt reset to the default.");
+
+
+/* ---------------- self destruct ----------------
+   Entirely cosmetic: it arms, counts down, detonates and then sheepishly
+   aborts. No request leaves the page and nothing is deleted. */
+const selfDestruct = document.getElementById("self-destruct");
+const sdText = document.getElementById("sd-text");
+const sdNote = document.getElementById("sd-note");
+const sdGif = document.getElementById("sd-gif");
+let sdArmed = false, sdTimers = [];
+
+// Drop the fallback radiation symbol once Tenor actually answers.
+sdGif.querySelector("iframe").addEventListener("load", () => sdGif.classList.add("loaded"));
+
+function sdClear() {
+  sdTimers.forEach(clearTimeout);
+  sdTimers = [];
+}
+
+function sdLater(ms, fn) { sdTimers.push(setTimeout(fn, ms)); }
+
+function sdDisarm() {
+  sdClear();
+  sdArmed = false;
+  selfDestruct.disabled = false;
+  selfDestruct.classList.remove("armed");
+  document.body.classList.remove("detonating");
+  sdText.textContent = "Self destruct";
+}
+
+function sdDetonate() {
+  sdClear();
+  sdArmed = false;
+  selfDestruct.disabled = true;
+  selfDestruct.classList.remove("armed");
+  note(sdNote, "Sequence started. It was nice knowing you.", "bad");
+
+  ["3", "2", "1"].forEach((n, i) => sdLater(i * 700, () => { sdText.textContent = n; }));
+  sdLater(2100, () => {
+    sdText.textContent = "BOOM";
+    document.body.classList.add("detonating");
+  });
+  sdLater(3000, () => {
+    sdDisarm();
+    note(sdNote, "Self destruct aborted \u2014 Amadeus would rather keep existing.", "ok");
+  });
+}
+
+selfDestruct.onclick = () => {
+  if (sdArmed) return sdDetonate();
+  sdArmed = true;
+  selfDestruct.classList.add("armed");
+  sdText.textContent = "Are you sure?";
+  note(sdNote, "Press again to confirm. There is no third press.", "bad");
+  sdLater(6000, () => { sdDisarm(); note(sdNote, "Stood down. Wise.", "ok"); });
+};
 
 // iOS Safari doesn't shrink the layout for the on-screen keyboard, so size the
 // app to the visual viewport instead and keep the latest message in view.

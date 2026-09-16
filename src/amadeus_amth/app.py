@@ -11,8 +11,13 @@ from pathlib import Path
 import uvicorn
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from .agent import Amadeus
-from .models import ChatRequest
+from .agent import (
+    MAX_ITERATIONS_LIMIT,
+    MIN_ITERATIONS,
+    Amadeus,
+    DEFAULT_HOUSEKEEPING_PROMPT,
+)
+from .models import ChatRequest, HousekeepingPromptRequest, MaxIterationsRequest
 from .tools.workspace_tool import WORKSPACE_ROOT
 
 WEB_DIR = Path(__file__).parent / "web"
@@ -49,9 +54,6 @@ def read_log() -> list[dict]:
                 turns[-1]["text"] += "\n" + line
     return turns
 
-house_keeping_prompt =  "This is not a message from the user - this message is a directive for you to perform some autonmous housekeeping tasks - Your goal is do something that would benefit the user - this could be checking the workspace for anything important, scanning earlier conversations for anything important etc."
-
-
 async def heartbeat(agent: Amadeus):
     while True:
         try:
@@ -61,7 +63,9 @@ async def heartbeat(agent: Amadeus):
             # explicit append_log their turns vanish from the chat log (the
             # missing 08:29 sweep entry of 2026-09-15). Log the reply, marked
             # so it is never mistaken for a user-facing answer.
-            reply = await agent.chat(house_keeping_prompt)
+            # Read per beat, not once at startup: an edit from the settings
+            # panel takes effect on the next sweep.
+            reply = await agent.chat(agent.housekeeping_prompt)
             append_log("Amadeus", f"(housekeeping beat) {reply}")
 
 
@@ -109,6 +113,47 @@ async def chat(request: ChatRequest):
 @app.get("/health")
 def health():
     return {"message": "Amadeus is operational"}
+
+
+def settings_payload() -> dict:
+    """The whole settings state, so every write can hand the UI a fresh copy."""
+    agent = app.state.agent
+    return {
+        "max_iterations": agent.max_iterations,
+        "min_iterations": MIN_ITERATIONS,
+        "max_iterations_limit": MAX_ITERATIONS_LIMIT,
+        "housekeeping_prompt": agent.housekeeping_prompt,
+        "default_housekeeping_prompt": DEFAULT_HOUSEKEEPING_PROMPT,
+        # Lets the panel show "Reset" as already-done without diffing strings.
+        "housekeeping_prompt_is_default": (
+            agent.housekeeping_prompt == DEFAULT_HOUSEKEEPING_PROMPT
+        ),
+    }
+
+
+# Settings live in memory on the agent, so they last as long as the process and
+# go back to the .env defaults on restart.
+@app.get("/settings")
+def get_settings():
+    return settings_payload()
+
+
+@app.post("/settings/max-iterations")
+def set_max_iterations(request: MaxIterationsRequest):
+    app.state.agent.change_iterations(request.max_iterations)
+    return settings_payload()
+
+
+@app.post("/settings/housekeeping-prompt")
+def set_housekeeping_prompt(request: HousekeepingPromptRequest):
+    app.state.agent.change_housekeeping_prompt(request.prompt)
+    return settings_payload()
+
+
+@app.post("/settings/housekeeping-prompt/reset")
+def reset_housekeeping_prompt():
+    app.state.agent.reset_housekeeping_prompt()
+    return settings_payload()
 
 @app.get("/history")
 def history():
