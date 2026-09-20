@@ -37,6 +37,17 @@ def today_log() -> Path:
     return path
 
 
+# The agent is supposed to make an empty reply impossible; this is the seatbelt
+# for the day something upstream slips one through. A named notice tells the
+# user what happened, where a blank bubble just looks like the app is broken.
+BLANK_REPLY_NOTICE = "(Nothing came back from the model on that turn - please send it again.)"
+
+
+def spoken(text: str) -> str:
+    """Never let an empty string reach the UI or the chat log."""
+    return text if (text or "").strip() else BLANK_REPLY_NOTICE
+
+
 def append_log(speaker: str, text: str):
     with open(today_log(), "a", encoding="utf-8") as f:
         f.write(f"[{datetime.now():%H:%M}] {speaker}: {text}\n")
@@ -52,7 +63,11 @@ def read_log() -> list[dict]:
                 turns.append({"role": "user" if speaker == "User" else "bot", "time": time, "text": text})
             elif turns:
                 turns[-1]["text"] += "\n" + line
-    return turns
+    # A turn whose text is blank renders as an empty bubble on reload, which
+    # reads as a bug rather than as history. Drop those instead of replaying
+    # them (a header line with the message on the lines below is not blank -
+    # its continuations have already been folded in by this point).
+    return [t for t in turns if t["text"].strip()]
 
 async def heartbeat(agent: Amadeus):
     while True:
@@ -65,7 +80,7 @@ async def heartbeat(agent: Amadeus):
             # so it is never mistaken for a user-facing answer.
             # Read per beat, not once at startup: an edit from the settings
             # panel takes effect on the next sweep.
-            reply = await agent.chat(agent.housekeeping_prompt)
+            reply = spoken(await agent.chat(agent.housekeeping_prompt))
             append_log("Amadeus", f"(housekeeping beat) {reply}")
 
 
@@ -104,7 +119,7 @@ app.add_middleware(
 @app.post("/chat")
 async def chat(request: ChatRequest):
     append_log("User", request.message)
-    reply = await app.state.agent.chat(request.message)
+    reply = spoken(await app.state.agent.chat(request.message))
     append_log("Amadeus", reply)
     return {"response": reply}
 

@@ -66,6 +66,13 @@ class Amadeus:
         )
         self.str_mem = STR_Memory(self.system_prompt, self.model, self.client)
         self.lt_mem = LongTermMemory()
+        # One turn at a time. chat() interleaves its own messages with tool
+        # results across several model round-trips, and the hourly heartbeat
+        # calls chat() on this same agent and short-term memory. Without this
+        # lock the two transcripts braid together: a `tool` message can end up
+        # separated from the assistant turn that asked for it, and a model
+        # handed that shape tends to answer with nothing at all.
+        self._turn_lock = asyncio.Lock()
 
         # The tool registry. Workspace and terminal tools are plain
         # module-level functions, so they can be shared; the memory tools are
@@ -115,57 +122,107 @@ class Amadeus:
             return f"Error: {name} failed: {e}"
 
     # glm-family thinking models occasionally spend their wrap-up turn on
-    # reasoning and return an empty content field — the 2026-09-15 empty
+    # reasoning and return an empty content field - the 2026-09-15 empty
     # replies (POST /chat 200 OK, nothing rendered). Recovery ladder: one
-    # retry with an explicit answer-as-content nudge, then the last
-    # non-empty assistant turn on record, then a spoken last resort.
+    # retry that shows the model its own reasoning back and asks for it as
+    # content, then the reasoning itself, then anything the model said
+    # earlier in this same turn, then a spoken last resort.
     # Never ship an empty string.
     EMPTY_REPLY_NUDGE = (
-        "Your previous response arrived with no message content. Reply now "
-        "with your final answer as plain message content — no tool calls, "
-        "no hidden reasoning."
+        "Your previous response arrived with no message content - everything "
+        "went into hidden reasoning. Reply now with your final answer to the "
+        "user as plain message content: no tool calls, no hidden reasoning."
     )
 
-    async def _finalize_reply(self, message) -> str:
-        """Turn the model's final (tool-free) turn into the text the user sees."""
+    async def _retry_for_content(self, thinking: str) -> str:
+        """Ask once more for the answer as message content.
+
+        The model's own empty turn goes back in with its reasoning attached,
+        so the nudge refers to something the model can actually see - the
+        earlier version sent two user messages in a row and asked about a
+        response that was nowhere in the transcript. think=False asks the
+        server to stop routing the answer into the thinking channel.
+        """
+        messages = self.str_mem.get_memory()
+        if thinking.strip():
+            messages = messages + [{"role": "assistant", "content": thinking.strip()}]
+        messages = messages + [{"role": "user", "content": self.EMPTY_REPLY_NUDGE}]
+
+        try:
+            response = await self.client.chat(
+                model=self.model, messages=messages, think=False
+            )
+        except Exception as e:
+            # think=False is rejected by some backends; try again without it
+            # rather than turning a recoverable empty turn into a 500.
+            print(f"[agent] Nudge with think=False failed ({e}); retrying plain.")
+            try:
+                response = await self.client.chat(model=self.model, messages=messages)
+            except Exception as e2:
+                print(f"[agent] Nudge failed: {e2}")
+                return ""
+        return response.message.content or ""
+
+    async def _finalize_reply(self, message, narration: str = "") -> str:
+        """Turn the model's final (tool-free) turn into the text the user sees.
+
+        `narration` is any content the model produced earlier in this same
+        turn, alongside its tool calls - it is about the question actually
+        being asked, so it beats an apology.
+        """
         content = message.content or ""
         if content.strip():
             return content
 
         thinking = getattr(message, "thinking", None) or ""
         print(
-            f"[agent] Empty model reply — content empty, thinking={len(thinking)} chars. "
+            f"[agent] Empty model reply - content empty, thinking={len(thinking)} chars. "
             f"Head: {thinking[:300]!r}"
         )
         print("[agent] Retrying once with an explicit answer-as-content nudge.")
 
-        response = await self.client.chat(
-            model=self.model,
-            messages=self.str_mem.get_memory()
-            + [{"role": "user", "content": self.EMPTY_REPLY_NUDGE}],
-        )
-        retried = response.message.content or ""
+        retried = await self._retry_for_content(thinking)
         if retried.strip():
             print("[agent] Retry recovered the reply.")
             return retried
 
-        print("[agent] Retry also empty — falling back to last non-empty assistant turn.")
-        for past in reversed(self.str_mem.get_memory()):
-            if past.get("role") == "assistant" and (past.get("content") or "").strip():
-                return past["content"]
+        # For these models the answer usually IS the reasoning, so speaking it
+        # beats dropping it. The previous version replayed the last non-empty
+        # assistant turn instead, which handed the user a stale answer to a
+        # question they had already asked.
+        if thinking.strip():
+            print("[agent] Retry also empty - answering from the model's reasoning.")
+            return thinking.strip()
+
+        if narration.strip():
+            print("[agent] Retry also empty - falling back to this turn's narration.")
+            return narration.strip()
+
+        print("[agent] Nothing usable in the model's turn.")
         return (
-            "(My model returned an empty reply twice and I had nothing usable on "
-            "record — please send that again.)"
+            "(My model finished that turn without saying anything - no content "
+            "and no reasoning to fall back on. Please send that again.)"
         )
 
     async def chat(self, user_message: str):  # thinking twin
-        timestamp = str(datetime.now())
         """Answer the user, letting the model use the workspace tools as it goes."""
+        async with self._turn_lock:
+            return await self._chat_turn(user_message)
+
+    async def _chat_turn(self, user_message: str) -> str:
+        timestamp = str(datetime.now())
         context = self.lt_mem.retrieve_memory(user_message)
         if context:
             user_message += f"\n\nContext from long-term memory:\n{context}"
-        await self.str_mem.add_to_memory({"role": "user", "content": f"[{timestamp}] {user_message}"})
+        await self.str_mem.add_to_memory(
+            {"role": "user", "content": f"[{timestamp}] {user_message}"}
+        )
 
+        # Content the model emits alongside its tool calls. Models narrate
+        # there ("Let me check the workspace first..."), and some put the whole
+        # answer there and then fall silent on the wrap-up turn, so it is kept
+        # instead of discarded.
+        narration = ""
 
         for _ in range(self.max_iterations):
             response = await self.client.chat(
@@ -175,10 +232,12 @@ class Amadeus:
             )
             message = response.message
 
+            if (message.content or "").strip():
+                narration = message.content
 
             # No tool calls means this is the actual reply to the user.
             if not message.tool_calls:
-                reply = await self._finalize_reply(message)
+                reply = await self._finalize_reply(message, narration)
                 # Store what the user actually received instead of the raw
                 # model turn, so an empty wrap-up turn never reaches the
                 # context window and the record matches the chat log.
@@ -190,7 +249,7 @@ class Amadeus:
             await self.str_mem.add_to_memory(message.model_dump(exclude_none=True))
 
             for call in message.tool_calls:
-                # Tools block on shells, pty waits and file IO — run them in a
+                # Tools block on shells, pty waits and file IO - run them in a
                 # worker thread so /chat and /health keep answering while a
                 # long command runs, instead of stalling the event loop.
                 content = await asyncio.to_thread(
@@ -204,7 +263,12 @@ class Amadeus:
                     }
                 )
 
-        return (
+        stopped = (
             f"Stopped after {self.max_iterations} rounds of tool calls without "
             f"reaching an answer."
         )
+        # Whatever the model managed to say on the way is worth more to the
+        # user than the notice on its own.
+        reply = f"{narration.strip()}\n\n({stopped})" if narration.strip() else stopped
+        await self.str_mem.add_to_memory({"role": "assistant", "content": reply})
+        return reply

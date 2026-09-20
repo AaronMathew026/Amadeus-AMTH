@@ -575,10 +575,15 @@ function addTurn(role, text, time = clock()) {
   return bubble;
 }
 
+// An empty bubble is indistinguishable from a broken app, so a reply that
+// arrives blank is shown as the error it is rather than as silence.
+const BLANK_REPLY = "(Nothing came back on that turn — please send it again.)";
+
 function fill(bubble, text, isError) {
-  bubble.textContent = text;
+  const blank = !(text || "").trim();
+  bubble.textContent = blank ? BLANK_REPLY : text;
   bubble.classList.add("reveal");
-  if (isError) bubble.closest(".turn").classList.add("error");
+  if (isError || blank) bubble.closest(".turn").classList.add("error");
   bubble.nextElementSibling.textContent = "Amadeus · " + clock();
 }
 
