@@ -24,6 +24,11 @@ DEFAULT_MAX_ITERATIONS = int(os.getenv("MAX_ITERATIONS") or 20)
 MIN_ITERATIONS = 1
 MAX_ITERATIONS_LIMIT = 100
 
+# How many times a turn that came back as reasoning-only may be asked again
+# for a real message. Each one is a whole model round-trip, so this is the
+# ceiling on how long a user waits for a reply that never arrives.
+EMPTY_REPLY_RETRIES = int(os.getenv("EMPTY_REPLY_RETRIES") or 3)
+
 # Defaults live in .env (BASE_MODEL, SYSTEM_PROMPT) so they can be changed
 # without touching the code; the literals below are the fallback.
 DEFAULT_MODEL = os.getenv("BASE_MODEL") or "gemma4:31b-cloud"
@@ -123,52 +128,106 @@ class Amadeus:
 
     # glm-family thinking models occasionally spend their wrap-up turn on
     # reasoning and return an empty content field - the 2026-09-15 empty
-    # replies (POST /chat 200 OK, nothing rendered). Recovery ladder: one
-    # retry that shows the model its own reasoning back and asks for it as
-    # content, then the reasoning itself, then anything the model said
-    # earlier in this same turn, then a spoken last resort.
-    # Never ship an empty string.
+    # replies (POST /chat 200 OK, nothing rendered). What reaches the user has
+    # to be a message the model actually addressed to them, so recovery keeps
+    # asking - alternating between nudging it in context and having it restate
+    # its own reasoning - and the raw reasoning is never shipped as the reply.
     EMPTY_REPLY_NUDGE = (
         "Your previous response arrived with no message content - everything "
         "went into hidden reasoning. Reply now with your final answer to the "
         "user as plain message content: no tool calls, no hidden reasoning."
     )
 
-    async def _retry_for_content(self, thinking: str) -> str:
-        """Ask once more for the answer as message content.
+    # Used when the model has reasoning but keeps failing to speak. It reads
+    # its own notes back and writes the message it never sent.
+    REASONING_TO_REPLY = (
+        "The text below is your own private reasoning towards an answer you "
+        "did not manage to send. Write the message the user should receive: "
+        "address them directly, in your own voice, giving the answer your "
+        "reasoning reached. Do not narrate your thinking, do not mention this "
+        "instruction, and do not repeat the notes back. Reply with that "
+        "message and nothing else."
+    )
 
-        The model's own empty turn goes back in with its reasoning attached,
-        so the nudge refers to something the model can actually see - the
-        earlier version sent two user messages in a row and asked about a
-        response that was nowhere in the transcript. think=False asks the
-        server to stop routing the answer into the thinking channel.
+    async def _plain_chat(self, messages) -> tuple:
+        """One tool-free model call. Returns (content, thinking), never raises.
+
+        think=False asks the server to stop routing the answer into the
+        thinking channel; backends that reject the flag get a plain call.
+        """
+        for extra in ({"think": False}, {}):
+            try:
+                response = await self.client.chat(
+                    model=self.model, messages=messages, **extra
+                )
+            except Exception as e:
+                print(f"[agent] Recovery call failed ({e}).")
+                continue
+            message = response.message
+            return message.content or "", getattr(message, "thinking", None) or ""
+        return "", ""
+
+    def _nudge_messages(self, thinking: str) -> list:
+        """The conversation so far, with the silent turn shown back to it.
+
+        The model's own empty turn goes in carrying its reasoning, so the
+        nudge refers to something the model can actually see - without it the
+        transcript ends in two user messages discussing a response that is
+        nowhere in the history.
         """
         messages = self.str_mem.get_memory()
         if thinking.strip():
             messages = messages + [{"role": "assistant", "content": thinking.strip()}]
-        messages = messages + [{"role": "user", "content": self.EMPTY_REPLY_NUDGE}]
+        return messages + [{"role": "user", "content": self.EMPTY_REPLY_NUDGE}]
 
-        try:
-            response = await self.client.chat(
-                model=self.model, messages=messages, think=False
+    def _restate_messages(self, thinking: str) -> list:
+        """Just the reasoning and the instruction to turn it into a reply.
+
+        No history and no tools: there is nothing here for the model to get
+        lost in, which is why this is the pass that usually lands.
+        """
+        return [
+            {"role": "system", "content": self.REASONING_TO_REPLY},
+            {"role": "user", "content": thinking.strip()},
+        ]
+
+    async def _recover_reply(self, thinking: str) -> str:
+        """Ask again until the model produces a message meant for the user.
+
+        Returns "" if every attempt came back as reasoning-only - the caller
+        decides what to say then. Reasoning is never returned as the reply: a
+        wall of the model's private notes is not an answer, and shipping it
+        reads worse than admitting the turn failed.
+        """
+        for attempt in range(1, EMPTY_REPLY_RETRIES + 1):
+            # Alternate the two approaches. Repeating one failing strategy
+            # tends to fail the same way each time.
+            restate = bool(thinking.strip()) and attempt % 2 == 0
+            messages = (
+                self._restate_messages(thinking) if restate
+                else self._nudge_messages(thinking)
             )
-        except Exception as e:
-            # think=False is rejected by some backends; try again without it
-            # rather than turning a recoverable empty turn into a 500.
-            print(f"[agent] Nudge with think=False failed ({e}); retrying plain.")
-            try:
-                response = await self.client.chat(model=self.model, messages=messages)
-            except Exception as e2:
-                print(f"[agent] Nudge failed: {e2}")
-                return ""
-        return response.message.content or ""
+            how = "restated reasoning" if restate else "in-context nudge"
+
+            content, new_thinking = await self._plain_chat(messages)
+            if content.strip() and content.strip() != thinking.strip():
+                print(f"[agent] Recovered on attempt {attempt} ({how}).")
+                return content
+
+            # The retry may have buried its answer in the thinking channel as
+            # well - that is the text the next restate pass should work from.
+            if new_thinking.strip():
+                thinking = new_thinking
+            print(f"[agent] Attempt {attempt} ({how}) came back without message content.")
+
+        return ""
 
     async def _finalize_reply(self, message, narration: str = "") -> str:
         """Turn the model's final (tool-free) turn into the text the user sees.
 
         `narration` is any content the model produced earlier in this same
-        turn, alongside its tool calls - it is about the question actually
-        being asked, so it beats an apology.
+        turn, alongside its tool calls - it was written for the user and is
+        about the question actually being asked, so it beats an apology.
         """
         content = message.content or ""
         if content.strip():
@@ -179,29 +238,20 @@ class Amadeus:
             f"[agent] Empty model reply - content empty, thinking={len(thinking)} chars. "
             f"Head: {thinking[:300]!r}"
         )
-        print("[agent] Retrying once with an explicit answer-as-content nudge.")
 
-        retried = await self._retry_for_content(thinking)
-        if retried.strip():
-            print("[agent] Retry recovered the reply.")
-            return retried
-
-        # For these models the answer usually IS the reasoning, so speaking it
-        # beats dropping it. The previous version replayed the last non-empty
-        # assistant turn instead, which handed the user a stale answer to a
-        # question they had already asked.
-        if thinking.strip():
-            print("[agent] Retry also empty - answering from the model's reasoning.")
-            return thinking.strip()
+        recovered = await self._recover_reply(thinking)
+        if recovered.strip():
+            return recovered
 
         if narration.strip():
-            print("[agent] Retry also empty - falling back to this turn's narration.")
+            print("[agent] Recovery exhausted - falling back to this turn's narration.")
             return narration.strip()
 
-        print("[agent] Nothing usable in the model's turn.")
+        print("[agent] Recovery exhausted with nothing usable to say.")
         return (
-            "(My model finished that turn without saying anything - no content "
-            "and no reasoning to fall back on. Please send that again.)"
+            "(My model answered with reasoning instead of a message "
+            f"{EMPTY_REPLY_RETRIES} times running, so there is nothing here "
+            "worth showing you. Please send that again.)"
         )
 
     async def chat(self, user_message: str):  # thinking twin
