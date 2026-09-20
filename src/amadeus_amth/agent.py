@@ -41,6 +41,31 @@ DEFAULT_SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT") or (
     "informative, and engaging for the user."
 )
 
+
+
+def _split_models(raw: str) -> list[str]:
+    """Parse a comma-separated model list from .env, dropping blanks."""
+    return [name.strip() for name in (raw or "").split(",") if name.strip()]
+
+
+# The catalogue the settings panel offers. It lives in .env as one comma-
+# separated line so adding a model is an edit to the environment rather than to
+# the code; anything Ollama will accept as a model name belongs here.
+DEFAULT_CLOUD_MODELS = _split_models(os.getenv("CLOUD_MODELS")) or [DEFAULT_MODEL]
+
+# Three named slots rather than a free-form model box: the switch beside the
+# chat composer flips between them mid-conversation, so a quick question can go
+# to something cheap and a hard one to something big without opening settings.
+TIERS = ("low", "medium", "high")
+DEFAULT_MODEL_TIERS = {
+    tier: os.getenv(f"{tier.upper()}_MODEL") or DEFAULT_MODEL for tier in TIERS
+}
+
+_boot_tier = (os.getenv("DEFAULT_TIER") or "medium").strip().lower()
+# A typo in .env should not take the server down with a KeyError on the first
+# message, so an unrecognised tier just means the middle one.
+DEFAULT_TIER = _boot_tier if _boot_tier in TIERS else "medium"
+
 # What the hourly heartbeat sends itself. Editable from the settings panel;
 # reset_housekeeping_prompt() puts this value back.
 DEFAULT_HOUSEKEEPING_PROMPT = os.getenv("HOUSEKEEPING_PROMPT") or (
@@ -54,12 +79,20 @@ DEFAULT_HOUSEKEEPING_PROMPT = os.getenv("HOUSEKEEPING_PROMPT") or (
 class Amadeus:
     def __init__(
         self,
-        model: str = DEFAULT_MODEL,
+        model: str | None = None,
         system_prompt: str = DEFAULT_SYSTEM_PROMPT,
         startup_message: str = "Your main server is running. This may the first time you have been launched. On the next user message check  for the Following files. IDENTITY.md,SOUL.md,USER.md, once the user sends their message, check if these files exist, if they do, continue as if you already know them. If these files are mssing, promptly ask them for the information required to fill the files in. THIS IS A CRITICAL MESSAGE, DO NOT FORGET IT.",
 
     ):
-        self.model = model
+        # The three slots and which one is live. The model actually used is
+        # whatever sits in the active slot, so the switch in the UI only has to
+        # move `active_tier`. An explicit `model` argument overrides that
+        # slot — constructing Amadeus(model="x") still runs "x".
+        self.model_tiers = dict(DEFAULT_MODEL_TIERS)
+        self.active_tier = DEFAULT_TIER
+        if model:
+            self.model_tiers[self.active_tier] = model
+        self.model = self.model_tiers[self.active_tier]
         self.client = ollama.AsyncClient()
         self.max_iterations = DEFAULT_MAX_ITERATIONS
         self.housekeeping_prompt = DEFAULT_HOUSEKEEPING_PROMPT
@@ -96,7 +129,61 @@ class Amadeus:
         """Change the maximum number of iterations for the chat loop."""
         self.max_iterations = new_iterations
         return self.max_iterations
+    def change_model(self, new_model: str) -> str:
+        """Run every following turn on `new_model`.
 
+        Short-term memory keeps its own copy of the name for the condense call,
+        so it is repointed here as well - otherwise a switch leaves the summary
+        pass still talking to the model the user just moved off.
+        """
+        new_model = new_model.strip()
+        self.model = new_model
+        self.str_mem.model = new_model
+        return self.model
+
+    def _check_tier(self, tier: str) -> str:
+        tier = (tier or "").strip().lower()
+        if tier not in TIERS:
+            raise ValueError(f"Unknown tier '{tier}'. Expected one of {', '.join(TIERS)}.")
+        return tier
+
+    def set_tier_model(self, tier: str, model: str) -> dict:
+        """Assign a model to the low / medium / high slot.
+
+        Changing the slot the agent is currently on switches the live model
+        too, so the button does what it looks like it does.
+        """
+        tier = self._check_tier(tier)
+        self.model_tiers[tier] = model.strip()
+        if tier == self.active_tier:
+            self.change_model(self.model_tiers[tier])
+        return self.model_state()
+
+    def select_tier(self, tier: str) -> dict:
+        """Flip the live model to whichever one that slot holds."""
+        self.active_tier = self._check_tier(tier)
+        self.change_model(self.model_tiers[self.active_tier])
+        return self.model_state()
+
+    def available_models(self) -> list[str]:
+        """The .env catalogue, plus anything the tiers or the live model point
+        at that is not in it - a model assigned by hand never disappears from
+        the list it was chosen from."""
+        models = list(DEFAULT_CLOUD_MODELS)
+        for name in [*self.model_tiers.values(), self.model]:
+            if name and name not in models:
+                models.append(name)
+        return models
+
+    def model_state(self) -> dict:
+        """Everything the UI needs to draw the model list and the switch."""
+        return {
+            "model": self.model,
+            "tiers": list(TIERS),
+            "active_tier": self.active_tier,
+            "model_tiers": dict(self.model_tiers),
+            "available_models": self.available_models(),
+        }
     def change_housekeeping_prompt(self, new_prompt: str) -> str:
         """Replace the directive the heartbeat sends itself each beat.
 

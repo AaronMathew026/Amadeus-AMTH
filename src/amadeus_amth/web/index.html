@@ -154,6 +154,8 @@
   .field { display: flex; flex-direction: column; gap: 8px; }
   .field > label { font-size: 13px; font-weight: 600; letter-spacing: .02em; }
   .field .help { margin: -4px 0 2px; font-size: 12px; color: var(--muted); line-height: 1.5; }
+  .field .help code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: #c4b5fd; }
+  .field .help b { color: var(--text); font-weight: 650; }
   .field .row { display: flex; align-items: center; gap: 10px; }
 
   .panel input[type="number"], .panel textarea {
@@ -200,6 +202,69 @@
   .note.show { opacity: 1; }
   .note.ok { color: var(--ok); }
   .note.bad { color: var(--danger); }
+
+  /* ---- model catalogue ----
+     One row per model: the name runs it straight away, the three letters pin
+     it to a tier slot. */
+  .models { display: flex; flex-direction: column; gap: 6px; }
+  .model-row {
+    display: flex; align-items: center; gap: 6px;
+    padding: 5px 6px 5px 10px; border-radius: 12px;
+    border: 1px solid var(--border); background: rgba(11, 8, 18, .45);
+    transition: border-color .2s, background .2s;
+  }
+  .model-row.live { border-color: var(--border-hi); background: var(--surface-hi); }
+  .model-name {
+    flex: 1; min-width: 0; padding: 4px 0; text-align: left;
+    border: 0; background: none; color: inherit; font: inherit; font-size: 13px;
+    cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    transition: color .2s;
+  }
+  .model-row.live .model-name { font-weight: 650; }
+  .model-name:hover { color: #d8b4fe; }
+  .tier-btn {
+    flex: none; width: 32px; height: 26px; border-radius: 8px; cursor: pointer;
+    border: 1px solid var(--border); background: transparent; color: var(--muted);
+    font: inherit; font-size: 11px; font-weight: 700; letter-spacing: .04em;
+    transition: background .2s, color .2s, border-color .2s, transform .15s var(--ease);
+  }
+  .tier-btn:hover:not(:disabled) { border-color: var(--border-hi); color: var(--text); }
+  .tier-btn:active:not(:disabled) { transform: scale(.92); }
+  .tier-btn.on {
+    background: var(--accent-grad); border-color: transparent; color: #fff;
+    box-shadow: 0 3px 12px -5px rgba(139, 92, 246, .9);
+  }
+  .models[aria-busy="true"] { opacity: .55; pointer-events: none; }
+
+  /* ---- tier switch above the composer ---- */
+  .tier-switch {
+    max-width: var(--col); margin: 0 auto 8px;
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+    animation: fade-up .5s var(--ease) both;
+  }
+  .seg {
+    display: flex; gap: 3px; padding: 3px; border-radius: 999px;
+    background: var(--surface); border: 1px solid var(--border);
+    backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  }
+  .seg button {
+    padding: 5px 15px; border: 0; border-radius: 999px; cursor: pointer;
+    background: transparent; color: var(--muted);
+    font: inherit; font-size: 12px; font-weight: 600;
+    transition: background .25s, color .25s, transform .15s var(--ease);
+  }
+  .seg button:hover:not(:disabled):not(.on) { color: var(--text); }
+  .seg button:active:not(:disabled) { transform: scale(.94); }
+  .seg button.on {
+    background: var(--accent-grad); color: #fff;
+    box-shadow: 0 3px 14px -6px rgba(139, 92, 246, .9);
+  }
+  .seg button:disabled { cursor: default; }
+  .tier-model {
+    font-size: 11px; color: var(--muted); opacity: .75;
+    max-width: 30ch; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .tier-model.bad { color: var(--danger); opacity: 1; }
 
   .panel-foot {
     padding: 12px 16px calc(14px + env(safe-area-inset-bottom));
@@ -427,6 +492,9 @@
     form { padding-top: 6px; padding-bottom: calc(8px + env(safe-area-inset-bottom)); }
     .bar { padding-left: 16px; }
     .hint { display: none; }
+    /* the model name is the first thing to go when width runs out */
+    .tier-model { display: none; }
+    .tier-switch { margin-bottom: 6px; }
     .ambient span { opacity: .4; }
     .icon-btn { width: 34px; height: 34px; border-radius: 10px; }
     .panel { width: 100%; border-left: 0; }
@@ -465,6 +533,13 @@
     </div>
 
     <div class="panel-body">
+      <section class="field">
+        <label id="models-label">Models</label>
+        <p class="help">The cloud models from <code>CLOUD_MODELS</code> in <code>.env</code>. <b>L</b>, <b>M</b> and <b>H</b> pin one to the low, medium or high slot; click a name to run it right now without touching the slots.</p>
+        <div class="models" id="models" role="group" aria-labelledby="models-label"></div>
+        <p class="note" id="model-note" role="status"></p>
+      </section>
+
       <section class="field">
         <label for="iter-num">Max iterations</label>
         <p class="help">How many rounds of tool calls Amadeus may take on one message before it has to stop and answer.</p>
@@ -522,6 +597,14 @@
   </main>
 
   <form id="form">
+    <div class="tier-switch">
+      <div class="seg" id="tier-seg" role="group" aria-label="Model tier">
+        <button type="button" data-tier="low">Low</button>
+        <button type="button" data-tier="medium">Medium</button>
+        <button type="button" data-tier="high">High</button>
+      </div>
+      <span class="tier-model" id="tier-model" role="status"></span>
+    </div>
     <div class="bar">
       <textarea id="msg" rows="1" placeholder="Message Amadeus…" autocomplete="off" enterkeyhint="send"></textarea>
       <button id="send" aria-label="Send" disabled>
@@ -548,6 +631,7 @@ const clock = () => new Date().toLocaleTimeString([], { hour: "2-digit", minute:
 
 function syncSend() {
   send.disabled = busy || !msg.value.trim();
+  syncTierSeg();
 }
 
 function autoGrow() {
@@ -674,6 +758,11 @@ const hkPrompt = document.getElementById("hk-prompt");
 const saveHk = document.getElementById("save-hk");
 const resetHk = document.getElementById("reset-hk");
 const hkNote = document.getElementById("hk-note");
+const modelsEl = document.getElementById("models");
+const modelNote = document.getElementById("model-note");
+const tierSeg = document.getElementById("tier-seg");
+const tierModel = document.getElementById("tier-model");
+const TIER_LABEL = { low: "Low", medium: "Medium", high: "High" };
 
 // Last state the server confirmed. Every field compares against this to decide
 // whether it is dirty, so Save only lights up when there is a real change.
@@ -715,6 +804,8 @@ function applySettings(data) {
   iterNum.max = iterRange.max = data.max_iterations_limit;
   if (!iterDirty) iterNum.value = iterRange.value = data.max_iterations;
   if (!hkDirty) hkPrompt.value = data.housekeeping_prompt;
+  renderModels();
+  renderTierSwitch();
   syncPanel();
 }
 
@@ -799,6 +890,114 @@ resetHk.onclick = () =>
   }, "Housekeeping prompt reset to the default.");
 
 
+/* ---------------- models & tiers ----------------
+   Three slots — low, medium, high — each holding a model name, and a switch
+   beside the composer that says which one the next message goes to. The panel
+   is where the slots are filled; the switch is where they are used. */
+
+// True while a model write is in flight. Two clicks racing would leave the
+// buttons showing whichever answer happened to land last.
+let tierBusy = false;
+
+// Switching model mid-reply would hand the rest of a tool loop to a different
+// model, so the switch is also held shut until the turn finishes.
+function syncTierSeg() {
+  for (const b of tierSeg.querySelectorAll("button")) b.disabled = busy || tierBusy;
+}
+
+// Rebuilt from the server's answer rather than patched in place, so what is on
+// screen is always a tier table the server has actually confirmed.
+function renderModels() {
+  if (!settings) return;
+  modelsEl.textContent = "";
+  for (const name of settings.available_models) {
+    const row = document.createElement("div");
+    row.className = "model-row" + (name === settings.model ? " live" : "");
+
+    const use = document.createElement("button");
+    use.type = "button";
+    use.className = "model-name";
+    use.textContent = name;
+    use.title = name === settings.model ? `${name} — running now` : `Switch to ${name} now`;
+    use.dataset.model = name;
+    row.append(use);
+
+    for (const tier of settings.tiers) {
+      const b = document.createElement("button");
+      b.type = "button";
+      const on = settings.model_tiers[tier] === name;
+      b.className = "tier-btn" + (on ? " on" : "");
+      b.textContent = TIER_LABEL[tier][0];
+      b.dataset.tier = tier;
+      b.dataset.model = name;
+      b.setAttribute("aria-pressed", String(on));
+      b.title = on ? `${name} is the ${tier} model` : `Set ${name} as the ${tier} model`;
+      row.append(b);
+    }
+    modelsEl.append(row);
+  }
+}
+
+function renderTierSwitch() {
+  if (!settings) return;
+  for (const b of tierSeg.querySelectorAll("button")) {
+    const on = b.dataset.tier === settings.active_tier;
+    b.classList.toggle("on", on);
+    b.setAttribute("aria-pressed", String(on));
+    b.title = `${TIER_LABEL[b.dataset.tier]} — ${settings.model_tiers[b.dataset.tier]}`;
+  }
+  tierModel.className = "tier-model";
+  tierModel.textContent = settings.model;
+}
+
+// Every model write returns the whole settings payload, so one helper covers
+// assigning a tier, picking a tier and switching model outright. The controls
+// are frozen while the request is in flight: two clicks racing would leave the
+// buttons showing whichever answer happened to land last.
+async function modelRequest(path, body, okText) {
+  modelsEl.setAttribute("aria-busy", "true");
+  tierBusy = true;
+  syncTierSeg();
+  try {
+    await settingsRequest(path, body);
+    if (okText) note(modelNote, okText, "ok");
+  } catch (err) {
+    note(modelNote, String(err), "bad");
+    // The panel may be closed, so the switch has to be able to say it itself.
+    tierModel.className = "tier-model bad";
+    tierModel.textContent = "Model change failed";
+    setTimeout(renderTierSwitch, 2600);
+  } finally {
+    modelsEl.removeAttribute("aria-busy");
+    tierBusy = false;
+    syncTierSeg();
+  }
+}
+
+// Delegated: renderModels() replaces these buttons on every update.
+modelsEl.addEventListener("click", (e) => {
+  const button = e.target.closest("button");
+  if (!button) return;
+  const model = button.dataset.model;
+  if (button.classList.contains("tier-btn")) {
+    const tier = button.dataset.tier;
+    if (settings && settings.model_tiers[tier] === model) return;
+    modelRequest("/settings/model-tier", { tier, model },
+      `${model} is now the ${tier} model.`);
+  } else {
+    if (settings && settings.model === model) return;
+    modelRequest("/model/change", { model }, `Running on ${model}.`);
+  }
+});
+
+tierSeg.addEventListener("click", (e) => {
+  const button = e.target.closest("button");
+  if (!button || (settings && settings.active_tier === button.dataset.tier)) return;
+  const tier = button.dataset.tier;
+  modelRequest("/settings/tier", { tier }, `Switched to the ${tier} model.`);
+});
+
+
 /* ---------------- self destruct ----------------
    Entirely cosmetic: it arms, counts down, detonates and then sheepishly
    aborts. No request leaves the page and nothing is deleted. */
@@ -868,6 +1067,9 @@ if (window.visualViewport) {
 }
 
 if (!touch) msg.focus();
+// The tier switch lives outside the drawer, so the settings have to be in hand
+// before anyone opens it.
+settingsRequest("/settings").catch(() => {});
 loadHistory();
 ping();
 setInterval(ping, 30000);

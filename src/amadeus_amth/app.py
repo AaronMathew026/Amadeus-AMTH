@@ -17,7 +17,14 @@ from .agent import (
     Amadeus,
     DEFAULT_HOUSEKEEPING_PROMPT,
 )
-from .models import ChatRequest, HousekeepingPromptRequest, MaxIterationsRequest
+from .models import (
+    ChatRequest,
+    HousekeepingPromptRequest,
+    MaxIterationsRequest,
+    ModelRequest,
+    TierModelRequest,
+    TierRequest,
+)
 from .tools.workspace_tool import WORKSPACE_ROOT
 
 WEB_DIR = Path(__file__).parent / "web"
@@ -143,6 +150,10 @@ def settings_payload() -> dict:
         "housekeeping_prompt_is_default": (
             agent.housekeeping_prompt == DEFAULT_HOUSEKEEPING_PROMPT
         ),
+        # The model catalogue, the three tier slots and which one is live. It
+        # rides along with the rest of the settings so the panel and the switch
+        # beside the composer redraw from one response.
+        **agent.model_state(),
     }
 
 
@@ -174,7 +185,29 @@ def reset_housekeeping_prompt():
 def history():
     """Today's conversation only, as structured turns for the web UI."""
     return {"turns": read_log()}
+@app.post("/model/change")
+def change_model(request: ModelRequest):
+    """Run the agent on a specific model, without touching the tier slots.
 
+    The tier buttons are the usual way in; this is the escape hatch for trying
+    a model that no slot points at. The next tier switch overrides it.
+    """
+    app.state.agent.change_model(request.model)
+    return settings_payload()
+
+
+@app.post("/settings/model-tier")
+def set_model_tier(request: TierModelRequest):
+    """Pin a model to the low, medium or high slot."""
+    app.state.agent.set_tier_model(request.tier, request.model)
+    return settings_payload()
+
+
+@app.post("/settings/tier")
+def select_tier(request: TierRequest):
+    """Move the live model to the one that slot holds."""
+    app.state.agent.select_tier(request.tier)
+    return settings_payload()
 
 # Mounted last on purpose: a mount at "/" swallows every path that no route
 # above it already claimed, so /chat and /health have to be declared first.
