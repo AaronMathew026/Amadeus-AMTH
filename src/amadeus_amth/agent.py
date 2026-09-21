@@ -46,6 +46,26 @@ DEFAULT_HOUSEKEEPING_PROMPT = os.getenv("HOUSEKEEPING_PROMPT") or (
 )
 
 
+# Some thinking models (glm, deepseek-r1 and friends) leak their reasoning into
+# the message content as a <think>...</think> block instead of the separate
+# thinking field. Anything up to and including the closing tag is reasoning, so
+# only the tail is the real answer. The last closing tag wins — a reply that
+# talks *about* the tag still ends with its own final one.
+THINK_CLOSE_TAG = "</think>"
+
+
+def strip_reasoning(text):
+    """Return only what follows the last </think> in `text`.
+
+    Text without the tag is handed back untouched, so this is safe to run over
+    every reply. Non-string content (the tool-call turns Ollama hands back) is
+    passed through as-is.
+    """
+    if not isinstance(text, str) or THINK_CLOSE_TAG not in text:
+        return text
+    return text.rsplit(THINK_CLOSE_TAG, 1)[1].lstrip()
+
+
 class Amadeus:
     def __init__(
         self,
@@ -128,7 +148,7 @@ class Amadeus:
 
     async def _finalize_reply(self, message) -> str:
         """Turn the model's final (tool-free) turn into the text the user sees."""
-        content = message.content or ""
+        content = strip_reasoning(message.content or "")
         if content.strip():
             return content
 
@@ -144,15 +164,18 @@ class Amadeus:
             messages=self.str_mem.get_memory()
             + [{"role": "user", "content": self.EMPTY_REPLY_NUDGE}],
         )
-        retried = response.message.content or ""
+        retried = strip_reasoning(response.message.content or "")
         if retried.strip():
             print("[agent] Retry recovered the reply.")
             return retried
 
         print("[agent] Retry also empty — falling back to last non-empty assistant turn.")
         for past in reversed(self.str_mem.get_memory()):
-            if past.get("role") == "assistant" and (past.get("content") or "").strip():
-                return past["content"]
+            if past.get("role") != "assistant":
+                continue
+            recovered = strip_reasoning(past.get("content") or "")
+            if recovered.strip():
+                return recovered
         return (
             "(My model returned an empty reply twice and I had nothing usable on "
             "record — please send that again.)"
@@ -187,7 +210,10 @@ class Amadeus:
 
             # The model's turn is remembered so that on the next pass it can
             # see the tool calls it just asked for.
-            await self.str_mem.add_to_memory(message.model_dump(exclude_none=True))
+            turn = message.model_dump(exclude_none=True)
+            if "content" in turn:
+                turn["content"] = strip_reasoning(turn["content"])
+            await self.str_mem.add_to_memory(turn)
 
             for call in message.tool_calls:
                 # Tools block on shells, pty waits and file IO — run them in a
