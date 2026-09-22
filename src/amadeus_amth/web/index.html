@@ -46,10 +46,12 @@
 
   /* ---- ambient background: drifting purple glows ---- */
   .ambient { position: fixed; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; }
+  /* No will-change: it would pin three full-screen layers in GPU memory even
+     while they sit still. An animating element is promoted on its own anyway. */
   .ambient span {
-    position: absolute; width: 70vmax; height: 70vmax; border-radius: 50%;
+    position: absolute; width: min(70vmax, 1000px); height: min(70vmax, 1000px); border-radius: 50%;
     background: radial-gradient(closest-side, var(--c), transparent);
-    opacity: .5; will-change: transform;
+    opacity: .5; contain: strict;
     animation: drift var(--t) ease-in-out infinite alternate;
   }
   .ambient span:nth-child(1) { --c: rgba(124, 58, 237, .45); --t: 22s; top: -30vmax; left: -20vmax; }
@@ -62,8 +64,10 @@
     mask-image: radial-gradient(ellipse at center, #000 20%, transparent 75%);
     -webkit-mask-image: radial-gradient(ellipse at center, #000 20%, transparent 75%);
   }
+  /* Translation only. Scaling a layer this size forces it to be re-rastered
+     at the new scale, which is the expensive half of the old animation. */
   @keyframes drift {
-    to { transform: translate3d(12vmax, 8vmax, 0) scale(1.15); }
+    to { transform: translate3d(12vmax, 8vmax, 0); }
   }
 
   /* ---- header ---- */
@@ -85,9 +89,10 @@
     content: ""; position: absolute; inset: -3px; border-radius: 14px;
     background: conic-gradient(from var(--angle), transparent 0 55%, #e9d5ff 80%, #a855f7 100%);
     opacity: 0; transition: opacity .3s;
-    animation: spin 1.2s linear infinite;
   }
-  body.thinking .logo::before { opacity: 1; }
+  /* The gradient repaints on every frame it spins, so it only spins while the
+     ring is actually visible. An idle page paints nothing here. */
+  body.thinking .logo::before { opacity: 1; animation: spin 1.2s linear infinite; }
   .brand h1 { margin: 0; font-size: 16px; font-weight: 650; letter-spacing: .01em; line-height: 1.2; }
   .status { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
   .status i {
@@ -225,7 +230,7 @@
     color: #fff; font: inherit; font-size: 19px; font-weight: 800;
     letter-spacing: .2em; text-transform: uppercase;
     text-shadow: 0 2px 8px rgba(0, 0, 0, .65);
-    cursor: pointer; animation: menace 2.4s ease-in-out infinite;
+    cursor: pointer; animation: menace 2.4s ease-in-out infinite paused;
     transition: transform .15s var(--ease), filter .2s, border-color .2s;
   }
   .self-destruct:hover:not(:disabled) { filter: brightness(1.08) saturate(1.12); }
@@ -234,6 +239,9 @@
   .self-destruct:active:not(:disabled) ~ .sd-gif { transform: translateX(-50%) scale(.975); }
   .self-destruct:focus-visible { outline: 3px solid #fecdd3; outline-offset: 3px; }
   .self-destruct:disabled { cursor: default; }
+  /* menace animates box-shadow, which repaints rather than composites; keep it
+     parked until the drawer that contains it is actually on screen. */
+  body.settings-open .self-destruct { animation-play-state: running; }
   .self-destruct.armed { border-color: #fff; animation-duration: .55s; }
   .sd-slot { display: block; width: 132px; height: 140px; }
   .sd-text { line-height: 1.2; }
@@ -304,10 +312,12 @@
     padding: 10px 15px; border-radius: 20px;
     white-space: pre-wrap; overflow-wrap: anywhere;
   }
+  /* No backdrop-filter: it is one blur pass per message per frame, so a long
+     conversation gets steadily more expensive to draw. The surface is
+     translucent either way, which is what the look actually depends on. */
   .turn.bot .bubble {
     background: var(--surface); border: 1px solid var(--border);
     border-bottom-left-radius: 6px;
-    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
   }
   .turn.user .bubble {
     background: var(--accent-grad); color: #fff;
@@ -413,6 +423,31 @@
   @keyframes glow { 50% { opacity: .55; transform: scale(1.12); } }
   @keyframes shimmer { to { background-position: 200% center; } }
 
+  /* ---- calm mode ----
+     Everything switched off here is continuous per-frame work: full-screen
+     blobs that recomposite forever, backdrop blurs that must re-read that
+     moving backdrop each time it moves, and gradients animated by repainting
+     rather than by the compositor. The watchdog in the script turns this on
+     when the page stops holding frame rate -- typically because something else
+     on the machine, such as a video, needs the GPU more than we do. Layout and
+     colour stay put; only the motion and the blur go. */
+  body.calm .ambient span { animation: none; }
+  body.calm .ambient span:nth-child(3),
+  body.calm .ambient::after { display: none; }
+  body.calm header, body.calm .bar, body.calm .panel, body.calm .scrim {
+    backdrop-filter: none; -webkit-backdrop-filter: none;
+  }
+  body.calm header { background: #110c1d; }
+  body.calm .bar { background: #191228; }
+  body.calm .panel { background: #140e22; }
+  body.calm .scrim { background: rgba(6, 4, 12, .74); }
+  body.calm .self-destruct { animation: none; }
+  body.calm .status.online i::after,
+  body.calm .empty .orb,
+  body.calm .empty .orb::before { animation: none; }
+  body.calm .empty h2 { animation: none; background-position: 0 center; }
+  body.calm #log { scroll-behavior: auto; }
+
   /* ---- phones ---- */
   @media (max-width: 600px) {
     body { font-size: 15px; }
@@ -497,9 +532,10 @@
             <span class="sd-slot" aria-hidden="true"></span>
             <span class="sd-text" id="sd-text">Self destruct</span>
           </button>
-          <div class="sd-gif" id="sd-gif" aria-hidden="true">
-            <iframe src="https://tenor.com/embed/143982391907906686" title="" scrolling="no" loading="lazy" tabindex="-1"></iframe>
-          </div>
+          <!-- Empty on purpose: the embed is a third-party player that keeps
+               decoding for as long as it is in the document, so it is mounted
+               when the drawer opens and torn down when it closes. -->
+          <div class="sd-gif" id="sd-gif" aria-hidden="true"></div>
         </div>
         <p class="note" id="sd-note" role="status"></p>
       </section>
@@ -730,6 +766,7 @@ function openSettings() {
   // Next frame, so the browser paints the off-screen position first and the
   // drawer actually slides in rather than appearing.
   requestAnimationFrame(() => document.body.classList.add("settings-open"));
+  sdGifMount();
   settingsRequest("/settings").catch((err) => note(iterNote, String(err), "bad"));
   panelClose.focus();
 }
@@ -740,7 +777,9 @@ function closeSettings() {
   settingsBtn.setAttribute("aria-expanded", "false");
   // Hide only once it has slid back out, so it isn't yanked off screen.
   setTimeout(() => {
-    if (!document.body.classList.contains("settings-open")) panel.hidden = scrim.hidden = true;
+    if (document.body.classList.contains("settings-open")) return;
+    panel.hidden = scrim.hidden = true;
+    sdGifUnmount();
   }, 350);
   settingsBtn.focus();
 }
@@ -803,8 +842,27 @@ const sdNote = document.getElementById("sd-note");
 const sdGif = document.getElementById("sd-gif");
 let sdArmed = false, sdTimers = [];
 
-// Drop the fallback radiation symbol once Tenor actually answers.
-sdGif.querySelector("iframe").addEventListener("load", () => sdGif.classList.add("loaded"));
+// The embed is a third-party player: while it is in the document it decodes
+// frames whether or not anyone can see it. Mount it with the drawer, drop it
+// again on the way out -- a session that never opens settings never loads it.
+const SD_GIF_SRC = "https://tenor.com/embed/143982391907906686";
+
+function sdGifMount() {
+  if (sdGif.firstElementChild) return;
+  const frame = document.createElement("iframe");
+  frame.title = "";
+  frame.scrolling = "no";
+  frame.tabIndex = -1;
+  // Drop the fallback radiation symbol once Tenor actually answers.
+  frame.addEventListener("load", () => sdGif.classList.add("loaded"));
+  frame.src = SD_GIF_SRC;
+  sdGif.append(frame);
+}
+
+function sdGifUnmount() {
+  sdGif.replaceChildren();
+  sdGif.classList.remove("loaded");
+}
 
 function sdClear() {
   sdTimers.forEach(clearTimeout);
@@ -858,14 +916,85 @@ if (window.visualViewport) {
     window.scrollTo(0, 0);
     scrollDown();
   };
-  vv.addEventListener("resize", fit);
+  // The keyboard animating in fires resize continuously, and fit() both writes
+  // a style and scrolls, so collapse a burst of them into one frame's work.
+  let queued = false;
+  vv.addEventListener("resize", () => {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(() => { queued = false; fit(); });
+  });
   fit();
 }
+
+/* ---------------- staying cheap when idle ----------------
+   The page's effects -- the ambient glows, the glass blurs, the gradient text
+   -- cost work on every frame for as long as the page is open. That is
+   affordable when the page has the machine to itself and not affordable when
+   it is sharing a GPU with something like a video, so measure the frame rate
+   the page is actually getting and fall back to calm mode (see the CSS) when
+   it stops keeping up. The verdict is remembered, because a machine that could
+   not afford the effects once will not be able to the next time either; load
+   the page with #motion on the URL to give it another chance. */
+const JANK_KEY = "amadeus:jank";
+
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch { /* private mode */ } },
+  drop(k) { try { localStorage.removeItem(k); } catch { /* private mode */ } },
+};
+
+if (location.hash === "#motion") store.drop(JANK_KEY);
+// Someone who has asked the OS for less motion is asking for exactly what calm
+// mode does, so take them at their word and never run the watchdog.
+let janky = store.get(JANK_KEY) === "1" || matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+function setCalm(on) {
+  document.body.classList.toggle("calm", on);
+}
+setCalm(janky || document.hidden);
+
+// Frames are only worth counting while the effects are on and on screen: in
+// calm mode there is nothing to measure, and a bare rAF loop would be the one
+// thing left keeping the machine awake at 60Hz.
+let prevFrame = 0, slowFrames = 0, seenFrames = 0;
+
+function watchFrames(now) {
+  if (document.hidden || janky) {
+    prevFrame = slowFrames = seenFrames = 0;
+  } else if (prevFrame) {
+    seenFrames++;
+    // Longer than three frames at 60Hz. One of these is a hiccup; ten inside a
+    // three second window is a page that cannot pay for itself.
+    if (now - prevFrame > 50) slowFrames++;
+    if (slowFrames >= 10) {
+      janky = true;
+      store.set(JANK_KEY, "1");
+      setCalm(true);
+      return; // nothing left to measure
+    }
+    if (seenFrames >= 180) seenFrames = slowFrames = 0;
+  }
+  prevFrame = document.hidden ? 0 : now;
+  requestAnimationFrame(watchFrames);
+}
+
+// Skip the load itself: parsing and first layout always blow the frame budget.
+if (!janky) setTimeout(() => requestAnimationFrame(watchFrames), 1500);
+
+// A hidden tab has nothing worth painting, and nothing worth polling either.
+let pingTimer = setInterval(ping, 30000);
+document.addEventListener("visibilitychange", () => {
+  setCalm(janky || document.hidden);
+  clearInterval(pingTimer);
+  if (document.hidden) return;
+  pingTimer = setInterval(ping, 30000);
+  ping();
+});
 
 if (!touch) msg.focus();
 loadHistory();
 ping();
-setInterval(ping, 30000);
 </script>
 </body>
 </html>
