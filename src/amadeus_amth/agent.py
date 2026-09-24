@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 
 from .memory.str_memory import STR_Memory
 from .memory.lt_memory import LongTermMemory
-from .tools import memory_tool, terminal_linux
+from .tools import memory_tool, terminal_linux, ntfy_tool
 from .tools.workspace_tool import FUNCTIONS, SCHEMAS
 from datetime import datetime, timedelta
 
@@ -91,11 +91,12 @@ class Amadeus:
         # module-level functions, so they can be shared; the memory tools are
         # bound to this agent's own LongTermMemory and have to be built per
         # instance.
-        self.schemas = SCHEMAS + memory_tool.SCHEMAS + terminal_linux.SCHEMAS
+        self.schemas = SCHEMAS + memory_tool.SCHEMAS + terminal_linux.SCHEMAS + ntfy_tool.SCHEMAS
         self.functions = {
             **FUNCTIONS,
             **terminal_linux.FUNCTIONS,
             **memory_tool.build_functions(self.lt_mem),
+            **ntfy_tool.FUNCTIONS,
         }
 
     def fetch_STR_memory(self):
