@@ -336,6 +336,62 @@
   .typing i:nth-child(2) { animation-delay: .15s; }
   .typing i:nth-child(3) { animation-delay: .3s; }
 
+  /* ---- rendered markdown (Amadeus's replies) ---- */
+  .bubble.md { white-space: normal; }
+  .md > :first-child { margin-top: 0; }
+  .md > :last-child { margin-bottom: 0; }
+  .md p, .md ul, .md ol, .md blockquote, .md .code, .md .table-wrap { margin: .6em 0; }
+  .md h1, .md h2, .md h3, .md h4, .md h5, .md h6 { margin: .9em 0 .35em; line-height: 1.3; font-weight: 650; }
+  .md h1 { font-size: 1.4em; }
+  .md h2 { font-size: 1.25em; }
+  .md h3 { font-size: 1.12em; }
+  .md h4, .md h5, .md h6 { font-size: 1em; }
+  .md h6 { color: var(--muted); }
+  .md strong { font-weight: 650; color: #fff; }
+  .md del { opacity: .7; }
+  .md a {
+    color: #c4b5fd; text-decoration: underline; text-underline-offset: 2px;
+    text-decoration-color: rgba(196, 181, 253, .4);
+  }
+  .md a:hover { text-decoration-color: currentColor; }
+  .md ul, .md ol { padding-left: 1.4em; }
+  .md li { margin: .2em 0; }
+  .md li > ul, .md li > ol { margin: .2em 0; }
+  .md li::marker { color: #a78bfa; }
+  .md li.task { list-style: none; margin-left: -1.3em; }
+  .md li.task input { margin: 0 .45em 0 0; vertical-align: -.1em; accent-color: var(--accent); }
+  .md blockquote { padding: .1em 0 .1em .9em; border-left: 3px solid rgba(168, 85, 247, .6); color: #cfc8e3; }
+  .md hr { border: 0; height: 1px; margin: 1em 0; background: var(--border); }
+  .md code {
+    font: .88em/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    padding: .1em .4em; border-radius: 6px;
+    background: rgba(11, 8, 18, .55); border: 1px solid var(--border);
+  }
+  .md .code { border: 1px solid var(--border); border-radius: 12px; background: rgba(8, 6, 14, .75); overflow: hidden; }
+  .md .code-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    padding: 3px 5px 3px 12px; font-size: 11px; letter-spacing: .04em; color: var(--muted);
+    background: rgba(167, 139, 250, .06); border-bottom: 1px solid var(--border);
+  }
+  .md .copy {
+    padding: 3px 8px; border: 0; border-radius: 6px; cursor: pointer;
+    background: transparent; color: var(--muted); font: inherit;
+    transition: color .2s, background .2s;
+  }
+  .md .copy:hover { color: var(--text); background: rgba(167, 139, 250, .14); }
+  .md pre {
+    margin: 0; padding: 10px 12px; overflow-x: auto;
+    white-space: pre; overflow-wrap: normal;
+    scrollbar-width: thin; scrollbar-color: rgba(167, 139, 250, .25) transparent;
+  }
+  .md pre code { padding: 0; border: 0; background: none; font-size: 13px; }
+  .md img { display: block; max-width: 100%; max-height: 360px; height: auto; margin: .5em 0; border-radius: 12px; }
+  .md .table-wrap { overflow-x: auto; }
+  /* the bubble's overflow-wrap: anywhere would squeeze cells to one letter wide */
+  .md table { border-collapse: collapse; font-size: .92em; overflow-wrap: normal; }
+  .md th, .md td { padding: 6px 10px; border: 1px solid var(--border); text-align: left; }
+  .md th { background: rgba(167, 139, 250, .1); font-weight: 600; }
+
   /* ---- empty state ---- */
   .empty {
     min-height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -582,6 +638,235 @@ let busy = false;
 const scrollDown = () => log.scrollTo({ top: log.scrollHeight });
 const clock = () => new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
+// ---- markdown ----
+// A small renderer for what replies actually use. Inline text is escaped
+// before any rule runs and block rules escape what they emit, so the only
+// tags that reach the DOM are the ones built here.
+const ESC = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+const esc = (s) => s.replace(/[&<>"']/g, (c) => ESC[c]);
+// URLs arrive already escaped, which is what an attribute value wants.
+const safeUrl = (u, img) =>
+  /^(?:https?:\/\/|mailto:|\/|\.\.?\/|#)/i.test(u) || (img && /^data:image\//i.test(u)) ? u : null;
+const IMG_URL = /\.(?:gif|png|jpe?g|webp|avif|svg|bmp)(?:[?#]\S*)?$/i;
+const EXT = 'target="_blank" rel="noopener noreferrer"';
+
+const FENCE = /^ {0,3}(`{3,}|~{3,})\s*([^\s`]*)/;
+const HEADING = /^ {0,3}(#{1,6})\s+(.*?)(?:\s+#+)?\s*$/;
+const HR = /^ {0,3}([-*_])(?:\s*\1){2,}\s*$/;
+const QUOTE = /^ {0,3}> ?/;
+const LI = /^(\s*)([-*+]|\d{1,9}[.)])\s+(.*)$/;
+const TABLE_SEP = /^\s*\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?\s*$/;
+const isTable = (l, next = "") => l.includes("|") && next.includes("|") && TABLE_SEP.test(next);
+const isStart = (l, next) =>
+  FENCE.test(l) || HEADING.test(l) || HR.test(l) || QUOTE.test(l) || LI.test(l) || isTable(l, next);
+
+function emphasis(s) {
+  return s
+    .replace(/\*\*\*(?=\S)([\s\S]*?\S)\*\*\*/g, "<strong><em>$1</em></strong>")
+    .replace(/\*\*(?=\S)([\s\S]*?\S)\*\*/g, "<strong>$1</strong>")
+    .replace(/(?<![\w\\])__(?=\S)([\s\S]*?\S)__(?!\w)/g, "<strong>$1</strong>")
+    .replace(/\*(?=\S)([^*\n]*?\S)\*/g, "<em>$1</em>")
+    .replace(/(?<![\w\\])_(?=\S)([^_\n]*?\S)_(?!\w)/g, "<em>$1</em>")
+    .replace(/~~(?=\S)([\s\S]*?\S)~~/g, "<del>$1</del>");
+}
+
+// Finished fragments are parked in `stash` behind \0n\0 markers, so later
+// rules can't reach into a URL or a code span and mangle it.
+function inline(src) {
+  const stash = [];
+  const put = (html) => `\u0000${stash.push(html) - 1}\u0000`;
+  const restore = (t) => t.replace(/\u0000(\d+)\u0000/g, (_, i) => restore(stash[i]));
+  let s = esc(src.replace(/\u0000/g, ""));
+
+  s = s.replace(/(`+)([^`]|[^`][\s\S]*?[^`])\1(?!`)/g,
+    (_, _t, code) => put(`<code>${code.replace(/^ ([\s\S]*) $/, "$1")}</code>`));
+  s = s.replace(/\\([\\`*_{}\[\]()#+\-.!~|])/g, (_, c) => put(c));
+  s = s.replace(/!\[([^\]]*)\]\(\s*([^\s)]+)(?:\s+&quot;([\s\S]*?)&quot;)?\s*\)/g, (m, alt, url, title) => {
+    const u = safeUrl(url, true);
+    return u ? put(`<img src="${u}" alt="${alt}"${title ? ` title="${title}"` : ""} loading="lazy">`) : m;
+  });
+  s = s.replace(/\[([^\]]+)\]\(\s*([^\s)]+)(?:\s+&quot;[\s\S]*?&quot;)?\s*\)/g, (m, text, url) => {
+    const u = safeUrl(url);
+    return u ? put(`<a href="${u}" ${EXT}>${emphasis(text)}</a>`) : m;
+  });
+  // Bare URLs, stopping before trailing punctuation. One that points at an
+  // image (a GIF included) is shown inline rather than as a link.
+  s = s.replace(/(?:&lt;)?\b(https?:\/\/[^\s\u0000]+?)(?:&gt;)?(?=(?:[.,;:!?)\]]|&quot;|&#39;|&gt;)*(?:\s|$|\u0000))/g,
+    (_, url) => put(IMG_URL.test(url)
+      ? `<a href="${url}" ${EXT}><img src="${url}" alt="" loading="lazy"></a>`
+      : `<a href="${url}" ${EXT}>${url}</a>`));
+
+  return restore(emphasis(s).replace(/\n/g, "<br>"));
+}
+
+const cells = (row) => row.trim().replace(/^\|/, "").replace(/(?<!\\)\|$/, "")
+  .split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, "|"));
+
+function dedent(lines) {
+  const pad = Math.min(...lines.filter((l) => l.trim()).map((l) => l.match(/^\s*/)[0].length));
+  return lines.map((l) => l.slice(pad));
+}
+
+// Index of the first line after the list that starts at lines[i].
+function listEnd(lines, i) {
+  const first = lines[i].match(LI), base = first[1].length, ordered = /\d/.test(first[2]);
+  for (i++; i < lines.length; i++) {
+    const l = lines[i];
+    if (!l.trim()) {
+      const next = lines[i + 1] || "";
+      if (LI.test(next) || /^\s+\S/.test(next)) continue;
+      return i;
+    }
+    if (HR.test(l)) return i;
+    const m = l.match(LI);
+    if (m) {
+      if (m[1].length <= base + 1 && /\d/.test(m[2]) !== ordered) return i;
+      continue;
+    }
+    if (/^\s+\S/.test(l)) continue;
+    if (isStart(l, lines[i + 1]) || !lines[i - 1].trim()) return i;
+    // otherwise a lazy continuation of the item above
+  }
+  return i;
+}
+
+function list(lines) {
+  const first = lines[0].match(LI), base = first[1].length;
+  const items = [];
+  for (const l of lines) {
+    const m = l.match(LI);
+    if (m && m[1].length <= base + 1) { items.push({ text: [m[3]], rest: [] }); continue; }
+    const item = items[items.length - 1];
+    if (!item.rest.length && l.trim() && !isStart(l.trim())) item.text.push(l.trim());
+    else item.rest.push(l);
+  }
+  const body = items.map(({ text, rest }) => {
+    let head = text.join("\n"), cls = "";
+    const task = head.match(/^\[([ xX])\]\s+/);
+    if (task) {
+      head = head.slice(task[0].length);
+      cls = ' class="task"';
+    }
+    const box = task ? `<input type="checkbox" disabled${task[1] === " " ? "" : " checked"}>` : "";
+    const nested = rest.some((l) => l.trim()) ? blocks(dedent(rest)) : "";
+    return `<li${cls}>${box}${inline(head)}${nested}</li>`;
+  }).join("");
+  if (!/\d/.test(first[2])) return `<ul>${body}</ul>`;
+  const start = parseInt(first[2], 10);
+  return `<ol${start !== 1 ? ` start="${start}"` : ""}>${body}</ol>`;
+}
+
+function table(head, sep, rows) {
+  const align = cells(sep).map((c) =>
+    /^:-+:$/.test(c) ? "center" : /-:$/.test(c) ? "right" : /^:/.test(c) ? "left" : "");
+  const row = (tag, r) => "<tr>" + head.map((_, i) =>
+    `<${tag}${align[i] ? ` style="text-align:${align[i]}"` : ""}>${inline(r[i] || "")}</${tag}>`).join("") + "</tr>";
+  return `<div class="table-wrap"><table><thead>${row("th", head)}</thead>` +
+    `<tbody>${rows.map((r) => row("td", r)).join("")}</tbody></table></div>`;
+}
+
+function blocks(lines) {
+  let out = "", i = 0, m;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (!line.trim()) { i++; continue; }
+
+    if ((m = line.match(FENCE))) {
+      const close = new RegExp(`^ {0,3}${m[1][0]}{${m[1].length},}\\s*$`), code = [];
+      for (i++; i < lines.length && !close.test(lines[i]); i++) code.push(lines[i]);
+      i++;
+      out += `<div class="code"><div class="code-head"><span>${esc(m[2] || "code")}</span>` +
+        `<button type="button" class="copy">Copy</button></div><pre><code>${esc(code.join("\n"))}</code></pre></div>`;
+    } else if ((m = line.match(HEADING))) {
+      const n = m[1].length;
+      out += `<h${n}>${inline(m[2])}</h${n}>`;
+      i++;
+    } else if (HR.test(line)) {
+      out += "<hr>";
+      i++;
+    } else if (QUOTE.test(line)) {
+      const quoted = [];
+      while (i < lines.length && QUOTE.test(lines[i])) quoted.push(lines[i++].replace(QUOTE, ""));
+      out += `<blockquote>${blocks(quoted)}</blockquote>`;
+    } else if (LI.test(line)) {
+      const end = listEnd(lines, i);
+      out += list(lines.slice(i, end));
+      i = end;
+    } else if (isTable(line, lines[i + 1])) {
+      const sep = lines[i + 1], rows = [];
+      for (i += 2; i < lines.length && lines[i].includes("|") && lines[i].trim(); i++) rows.push(cells(lines[i]));
+      out += table(cells(line), sep, rows);
+    } else {
+      const para = [];
+      while (i < lines.length && lines[i].trim() && (!para.length || !isStart(lines[i], lines[i + 1]))) {
+        para.push(lines[i++].trim());
+      }
+      out += `<p>${inline(para.join("\n"))}</p>`;
+    }
+  }
+  return out;
+}
+
+const markdown = (text) => blocks(text.replace(/\r\n?/g, "\n").split("\n"));
+
+// Replies are rendered; the user's own messages and errors stay verbatim.
+function setBody(bubble, text, rich) {
+  bubble.classList.toggle("md", rich);
+  if (rich) bubble.innerHTML = markdown(text);
+  else bubble.textContent = text;
+}
+
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    // Plain http on a LAN address isn't a secure context, so there is no
+    // async clipboard there; fall back to the old selection trick.
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.cssText = "position:fixed;opacity:0";
+    document.body.append(ta);
+    ta.select();
+    let ok = false;
+    try { ok = document.execCommand("copy"); } catch {}
+    ta.remove();
+    return ok;
+  }
+}
+
+log.addEventListener("click", async (e) => {
+  const btn = e.target.closest(".md .copy");
+  if (!btn) return;
+  const ok = await copyText(btn.closest(".code").querySelector("code").textContent);
+  btn.textContent = ok ? "Copied" : "Copy failed";
+  setTimeout(() => { btn.textContent = "Copy"; }, 1500);
+});
+
+// Images finish loading after the reply is laid out; follow them down only if
+// the reader was already at the bottom.
+log.addEventListener("load", (e) => {
+  const img = e.target;
+  if (img.tagName !== "IMG" || !img.closest(".md")) return;
+  if (log.scrollHeight - log.scrollTop - log.clientHeight < img.offsetHeight + 120) scrollDown();
+}, true);
+
+// A broken image falls back to a plain link rather than an empty frame.
+log.addEventListener("error", (e) => {
+  const img = e.target;
+  if (img.tagName !== "IMG" || !img.closest(".md")) return;
+  if (img.parentElement.tagName === "A") {
+    img.replaceWith(img.getAttribute("src"));
+    return;
+  }
+  const a = document.createElement("a");
+  a.href = img.src;
+  a.target = "_blank";
+  a.rel = "noopener noreferrer";
+  a.textContent = img.alt || img.getAttribute("src");
+  img.replaceWith(a);
+}, true);
+
 function syncSend() {
   send.disabled = busy || !msg.value.trim();
 }
@@ -604,7 +889,7 @@ function addTurn(role, text, time = clock()) {
   if (text === null) {
     bubble.innerHTML = '<span class="typing" aria-label="Amadeus is typing"><i></i><i></i><i></i></span>';
   } else {
-    bubble.textContent = text;
+    setBody(bubble, text, role === "bot");
   }
   log.append(turn);
   scrollDown();
@@ -612,7 +897,7 @@ function addTurn(role, text, time = clock()) {
 }
 
 function fill(bubble, text, isError) {
-  bubble.textContent = text;
+  setBody(bubble, text, !isError);
   bubble.classList.add("reveal");
   if (isError) bubble.closest(".turn").classList.add("error");
   bubble.nextElementSibling.textContent = "Amadeus · " + clock();
