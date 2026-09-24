@@ -1,9 +1,10 @@
 """ntfy tools — let the model ping Aaron's phone in real time via ntfy.sh.
 
 One tool, one job: send_ntfy posts a push notification to Aaron's personal
-topic. The topic URL is hardcoded on purpose — this tool exists to reach that
-one channel, and keeping it out of configuration means it cannot be pointed
-somewhere else by accident or by prompt injection.
+topic. The topic URL lives only in .env (TOPIC_URL) — never in source — so it
+cannot leak through the public repo. It is read at call time (after agent.py's
+load_dotenv) and there is deliberately no parameter that can redirect a send:
+prompt injection can choose the words, never the destination.
 
 Real-time only by construction: there is no delay/scheduled-publish parameter
 and no timer support. Anything that needs to happen later is the heartbeat's
@@ -12,12 +13,20 @@ or a cron's job, not this module's.
 
 import functools
 import json
+import os
 import urllib.error
 import urllib.request
 
 # Aaron's phone-ping channel (re-armed 2026-09-24 at his explicit request).
+# The URL is a credential — anyone who knows it can ping the phone — so it
+# lives in .env as TOPIC_URL, read at call time. Never hardcode it back here.
 # Channel record: workspace/shared/config/ntfy_channel.md
-TOPIC_URL = "https://ntfy.sh/aemeath-wake-aaron-x7k2p9"
+def _topic_url() -> str:
+    """Read the topic URL from the environment, erroring clearly if absent."""
+    url = os.environ.get("TOPIC_URL", "").strip()
+    if not url:
+        raise NtfyError("TOPIC_URL is not set — add it to .env.")
+    return url
 
 # Priorities ntfy.sh accepts, as sent on the wire.
 VALID_PRIORITIES = ("min", "low", "default", "high", "urgent")
@@ -64,6 +73,7 @@ def send_ntfy(
         raise NtfyError(
             f"priority must be one of {', '.join(VALID_PRIORITIES)} (got '{priority}')."
         )
+    url = _topic_url()
 
     body = message.encode("utf-8")
     headers = {
@@ -71,7 +81,7 @@ def send_ntfy(
         "Priority": priority,
         "Tags": tags or "bell",
     }
-    req = urllib.request.Request(TOPIC_URL, data=body, headers=headers, method="POST")
+    req = urllib.request.Request(url, data=body, headers=headers, method="POST")
     with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
         payload = json.loads(resp.read().decode("utf-8"))
 
