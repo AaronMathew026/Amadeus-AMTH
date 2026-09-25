@@ -1,4 +1,4 @@
-Amadeus-AMTH
+# Amadeus-AMTH
 The production version of AMADEUS — an AI assistant with fully autonomous
 capabilities, built to run in an isolated Docker Compose stack on a mini-server.
 Layout
