@@ -17,31 +17,37 @@ class STR_Memory():
         self.max_memory_size = 30
         self.model = model
         self.client = client or ollama.AsyncClient()
-        # Serializes add_to_memory's check/condense/append: two concurrent
-        # chats (a real /chat plus the hourly heartbeat beat) must not both
-        # trigger condense_memory, and nothing may append while a condense's
-        # Ollama round-trip is in flight.
-        # See shared/reports/memory_race_fix_guide.md.
+        # Serializes commit's check/condense/append: the moment a finished
+        # exchange lands must be atomic, so a condense can never slice it and
+        # no other writer can interleave its messages.
         self._lock = asyncio.Lock()
         self.memory = []
         self.memory.append({"role": "system", "content": sys_prompt})
 
 
-    async def add_to_memory(self, message: dict):
+    async def commit(self, exchange: list):
+        """Append one finished chat exchange to the running memory.
+
+        An exchange is the whole span of a single chat() call — user message,
+        every tool-call turn and tool result, and the final assistant reply.
+        Committing only finished, self-consistent exchanges is what keeps the
+        context valid: concurrent chats build on snapshots instead of sharing
+        in-flight turns, and a condense here can never orphan a tool-call turn
+        that a model round-trip is about to answer.
+        """
         async with self._lock:
-            if len(self.memory) >= self.max_memory_size:
+            if len(self.memory) + len(exchange) >= self.max_memory_size:
                 await self.condense_memory()
-            self.memory.append(message)
+            self.memory.extend(exchange)
 
     def get_memory(self):
-        # Copy, not reference: stops a concurrent append from landing inside
-        # another request's context mid-serialization.
+        # Copy, not reference: a caller keeps a snapshot while commits land.
         return list(self.memory)
 
 
     async def condense_memory(self):
         # Snapshot BEFORE the await: summarize exactly this slice. With
-        # add_to_memory holding the lock this equals the old clear_memory()
+        # commit holding the lock this equals the old clear_memory()
         # wipe, but the invariant now lives here instead of trusting every
         # caller — and a lock-bypassing late arrival would land AFTER the
         # summary instead of being deleted unseen.
