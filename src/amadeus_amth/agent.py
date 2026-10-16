@@ -147,7 +147,27 @@ class Amadeus:
         "no hidden reasoning."
     )
 
-    async def _finalize_reply(self, message) -> str:
+    # Cloud models and the Ollama server in front of them fail a request
+    # outright now and then — a timeout, a 5xx from ollama.com. One quick
+    # retry absorbs the transient hiccups; a failure that survives the retry
+    # comes back as None, so the caller answers in words instead of letting
+    # an exception kill the request. Tool failures already come back as text
+    # (run_tool); model failures get the same treatment.
+    async def _call_model(self, messages, tools=None):
+        for attempt in (1, 2):
+            try:
+                if tools is None:
+                    return await self.client.chat(model=self.model, messages=messages)
+                return await self.client.chat(
+                    model=self.model, messages=messages, tools=tools
+                )
+            except Exception as e:
+                print(f"[agent] Model call failed (attempt {attempt}/2): {e!r}")
+                if attempt == 1:
+                    await asyncio.sleep(2)
+        return None
+
+    async def _finalize_reply(self, message, context) -> str:
         """Turn the model's final (tool-free) turn into the text the user sees."""
         content = strip_reasoning(message.content or "")
         if content.strip():
@@ -160,18 +180,17 @@ class Amadeus:
         )
         print("[agent] Retrying once with an explicit answer-as-content nudge.")
 
-        response = await self.client.chat(
-            model=self.model,
-            messages=self.str_mem.get_memory()
-            + [{"role": "user", "content": self.EMPTY_REPLY_NUDGE}],
+        response = await self._call_model(
+            context + [{"role": "user", "content": self.EMPTY_REPLY_NUDGE}]
         )
-        retried = strip_reasoning(response.message.content or "")
-        if retried.strip():
-            print("[agent] Retry recovered the reply.")
-            return retried
+        if response is not None:
+            retried = strip_reasoning(response.message.content or "")
+            if retried.strip():
+                print("[agent] Retry recovered the reply.")
+                return retried
 
-        print("[agent] Retry also empty — falling back to last non-empty assistant turn.")
-        for past in reversed(self.str_mem.get_memory()):
+        print("[agent] Retry gave nothing — falling back to last non-empty assistant turn.")
+        for past in reversed(context):
             if past.get("role") != "assistant":
                 continue
             recovered = strip_reasoning(past.get("content") or "")
@@ -182,39 +201,49 @@ class Amadeus:
             "record — please send that again.)"
         )
 
-    async def chat(self, user_message: str):  # thinking twin
-        timestamp = str(datetime.now())
+    async def chat(self, user_message: str):
         """Answer the user, letting the model use the workspace tools as it goes."""
+        # The loop talks to the model on top of `base`, a snapshot of shared
+        # memory, and keeps its own turns in `turns` until the exchange is
+        # finished. The hourly heartbeat and a user /chat share one agent and
+        # one STR_Memory; when two chats appended turns to it mid-flight, the
+        # contexts they later sent could interleave — tool results stranded
+        # after another chat's user turn, or an unanswered tool-call turn cut
+        # off by a condense — and Ollama rejects such sequences outright.
+        # A finished exchange, committed in one piece, can never split.
+        base = self.str_mem.get_memory()
+        timestamp = str(datetime.now())
         context = self.lt_mem.retrieve_memory(user_message)
         if context:
             user_message += f"\n\nContext from long-term memory:\n{context}"
-        await self.str_mem.add_to_memory({"role": "user", "content": f"[{timestamp}] {user_message}"})
-
+        turns = [{"role": "user", "content": f"[{timestamp}] {user_message}"}]
 
         for _ in range(self.max_iterations):
-            response = await self.client.chat(
-                model=self.model,
-                messages=self.str_mem.get_memory(),
-                tools=self.schemas,
-            )
+            response = await self._call_model(base + turns, tools=self.schemas)
+            if response is None:
+                # Nothing is committed: an exchange that never got an answer
+                # stays out of the context window instead of leaving a
+                # half-finished turn behind for the next chat to trip on.
+                print("[agent] Model unreachable — dropping the unfinished exchange.")
+                return (
+                    "I couldn't reach my model just now — please send that "
+                    "again in a moment."
+                )
             message = response.message
-
 
             # No tool calls means this is the actual reply to the user.
             if not message.tool_calls:
-                reply = await self._finalize_reply(message)
-                # Store what the user actually received instead of the raw
-                # model turn, so an empty wrap-up turn never reaches the
-                # context window and the record matches the chat log.
-                await self.str_mem.add_to_memory({"role": "assistant", "content": reply})
+                reply = await self._finalize_reply(message, base + turns)
+                turns.append({"role": "assistant", "content": reply})
+                await self.str_mem.commit(turns)
                 return reply
 
-            # The model's turn is remembered so that on the next pass it can
-            # see the tool calls it just asked for.
+            # The model's turn joins this chat's local exchange so that on the
+            # next pass it can see the tool calls it just asked for.
             turn = message.model_dump(exclude_none=True)
             if "content" in turn:
                 turn["content"] = strip_reasoning(turn["content"])
-            await self.str_mem.add_to_memory(turn)
+            turns.append(turn)
 
             for call in message.tool_calls:
                 # Tools block on shells, pty waits and file IO — run them in a
@@ -223,7 +252,7 @@ class Amadeus:
                 content = await asyncio.to_thread(
                     self.run_tool, call.function.name, call.function.arguments
                 )
-                await self.str_mem.add_to_memory(
+                turns.append(
                     {
                         "role": "tool",
                         "tool_name": call.function.name,
@@ -231,7 +260,12 @@ class Amadeus:
                     }
                 )
 
-        return (
+        # The cap ran out mid-task. The stop notice closes the exchange as an
+        # assistant turn, so a bare tool result never ends up last in memory.
+        reply = (
             f"Stopped after {self.max_iterations} rounds of tool calls without "
             f"reaching an answer."
         )
+        turns.append({"role": "assistant", "content": reply})
+        await self.str_mem.commit(turns)
+        return reply
