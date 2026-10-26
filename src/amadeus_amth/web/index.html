@@ -580,6 +580,15 @@
         <p class="note" id="hk-note" role="status"></p>
       </section>
 
+      <section class="field">
+        <label for="voice-enabled">Voice playback</label>
+        <p class="help">Play Amadeus responses automatically when audio is available.</p>
+        <label class="check-row">
+          <input type="checkbox" id="voice-enabled">
+          <span>Play generated responses</span>
+        </label>
+      </section>
+
       <section class="field danger-zone">
         <label id="sd-label">Danger zone</label>
         <p class="help">Irreversible. Catastrophic. Absolutely not to be pressed by anyone, for any reason, ever.</p>
@@ -622,6 +631,8 @@
     </div>
     <p class="hint"><kbd>Enter</kbd> to send · <kbd>Shift</kbd> + <kbd>Enter</kbd> for a new line</p>
   </form>
+
+  <audio id="voice-player" preload="auto"></audio>
 
 <script>
 const log = document.getElementById("log");
@@ -947,7 +958,9 @@ form.onsubmit = async (e) => {
       body: JSON.stringify({ message: text }),
     });
     if (!r.ok) throw new Error(`server returned ${r.status}`);
-    fill(pending, (await r.json()).response);
+    const result = await r.json();
+    fill(pending, result.response);
+    playVoice(result.audio);
     setStatus(true);
   } catch (err) {
     fill(pending, String(err), true);
@@ -990,6 +1003,9 @@ const hkPrompt = document.getElementById("hk-prompt");
 const saveHk = document.getElementById("save-hk");
 const resetHk = document.getElementById("reset-hk");
 const hkNote = document.getElementById("hk-note");
+const voiceEnabled = document.getElementById("voice-enabled");
+const voicePlayer = document.getElementById("voice-player");
+const VOICE_ENABLED_KEY = "amadeus:voice-enabled";
 
 // Last state the server confirmed. Every field compares against this to decide
 // whether it is dirty, so Save only lights up when there is a real change.
@@ -1228,6 +1244,20 @@ const store = {
   set(k, v) { try { localStorage.setItem(k, v); } catch { /* private mode */ } },
   drop(k) { try { localStorage.removeItem(k); } catch { /* private mode */ } },
 };
+
+voiceEnabled.checked = store.get(VOICE_ENABLED_KEY) !== "0";
+voiceEnabled.addEventListener("change", () => {
+  store.set(VOICE_ENABLED_KEY, voiceEnabled.checked ? "1" : "0");
+  if (!voiceEnabled.checked) voicePlayer.pause();
+});
+
+function playVoice(path) {
+  if (!voiceEnabled.checked || !path) return;
+  voicePlayer.src = `${path}?t=${Date.now()}`;
+  voicePlayer.play().catch(() => {
+    // Browsers can reject playback when the page is no longer user-activated.
+  });
+}
 
 if (location.hash === "#motion") store.drop(JANK_KEY);
 // Someone who has asked the OS for less motion is asking for exactly what calm

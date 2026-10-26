@@ -1,6 +1,7 @@
 import ollama
 import requests
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import asyncio
 import contextlib
@@ -22,6 +23,7 @@ from .tools.workspace_tool import WORKSPACE_ROOT
 
 WEB_DIR = Path(__file__).parent / "web"
 CHAT_LOG_DIR = WORKSPACE_ROOT / "chat_logs"
+VOICE_PATH = WORKSPACE_ROOT.parent / "voice" / "output.mp3"
 
 # Each turn starts with "[HH:MM] User: " or "[HH:MM] Amadeus: "; any line that
 # doesn't is a continuation of a multi-line message.
@@ -106,7 +108,14 @@ async def chat(request: ChatRequest):
     append_log("User", request.message)
     reply = await app.state.agent.chat(request.message)
     append_log("Amadeus", reply)
-    return {"response": reply}
+    return {"response": reply, "audio": "/voice/output.mp3"}
+
+
+@app.get("/voice/output.mp3")
+def voice_output():
+    if not VOICE_PATH.is_file():
+        return {"error": "No generated voice is available."}
+    return FileResponse(VOICE_PATH, media_type="audio/mpeg")
 
 
 
