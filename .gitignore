@@ -39,6 +39,10 @@ htmlcov/
 # uv
 .uv/
 
+# Generated voice files
+voice/*
+!voice/.gitkeep
+
 # Editors / IDEs
 .vscode/
 .idea/
