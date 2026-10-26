@@ -4,6 +4,8 @@ import os
 import ollama
 from dotenv import load_dotenv
 
+from amadeus_amth import gen_voice
+
 from .memory.str_memory import STR_Memory
 from .memory.lt_memory import LongTermMemory
 from .tools import memory_tool, terminal_linux, ntfy_tool
@@ -237,6 +239,11 @@ class Amadeus:
                 reply = await self._finalize_reply(message, base + turns)
                 turns.append({"role": "assistant", "content": reply})
                 await self.str_mem.commit(turns)
+                try:
+                    await asyncio.to_thread(gen_voice.gen_voice, reply)
+                except Exception as e:
+                    print(f"[voice] Generation failed: {e!r}")
+                print(f"Generated voice for reply: {reply}")
                 return reply
 
             # The model's turn joins this chat's local exchange so that on the
