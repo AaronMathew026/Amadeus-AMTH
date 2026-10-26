@@ -66,5 +66,8 @@ chat.html
 workspace/*
 !workspace/.gitkeep
 
+# Local runtime backups
+backups/
+
 # ChromaDB runtime blobs (semantic memory, machine-local)
 src/amadeus_amth/memory/semantic_memory/
