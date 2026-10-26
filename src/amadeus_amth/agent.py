@@ -106,6 +106,7 @@ class Amadeus:
         self.max_iterations = new_iterations
         return self.max_iterations
 
+
     def change_housekeeping_prompt(self, new_prompt: str) -> str:
         """Replace the directive the heartbeat sends itself each beat.
 
