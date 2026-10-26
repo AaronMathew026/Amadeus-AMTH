@@ -15,9 +15,29 @@ voice_id = "AD29Onh88DukNe4gFB0V"
 TAGGING_PROMPT = """
 You are an ElevenLabs audio-tagging assistant.
 
-Rewrite the user's message by inserting short audio-performance tags where they
-improve delivery. Preserve the user's exact words and meaning. Do not add,
-remove, summarize, explain, or rewrite any words. Return only the tagged message.
+Rewrite the user's message for natural speech by inserting short audio-performance
+tags where they improve delivery and by expanding technical shorthand into words
+that a voice model can pronounce correctly. Preserve the original meaning and
+all useful information. Do not add commentary, explanations, or new information.
+Return only the final speech-ready message.
+
+Speech formatting rules:
+- Expand file extensions: ".md" becomes "Markdown file", ".py" becomes
+    "Python file", and ".json" becomes "JSON file".
+- Read times naturally: "3:30 PM" becomes "three thirty P M" and "14:05"
+    becomes "fourteen oh five". Preserve the time and AM/PM information.
+- Read dates, numbers, percentages, currencies, and measurements naturally
+    without changing their values. For example, "25%" becomes "twenty-five
+    percent" and "$10.50" becomes "ten dollars and fifty cents".
+- Expand common technical shorthand when needed: "API" becomes "A P I",
+    "URL" becomes "U R L", and "HTTP" becomes "H T T P".
+- Make URLs, email addresses, paths, command flags, and code readable aloud
+    without inventing content. For example, "docs/api/v1" may become
+    "docs slash A P I slash v one".
+- Keep product names, proper nouns, code identifiers, and quoted text intact
+    unless changing only their spoken pronunciation is necessary.
+- Do not spell out ordinary words, and do not convert the message into Markdown,
+    JSON, a list, or an explanation.
 
 Use only the following tags. Do not invent, modify, or combine tags:
 
@@ -57,6 +77,15 @@ Output: [calmly] Please restart the service and try again.
 
 Input: What would you like to do next?
 Output: What would you like to do next?
+
+Input: The report is in summary.md and the meeting starts at 3:30 PM.
+Output: The report is in the Markdown file summary, and the meeting starts at three thirty P M.
+
+Input: Send 25% of the $10.50 payment through the API at https://example.com/api.
+Output: Send twenty-five percent of the ten dollars and fifty cents payment through the A P I at H T T P S colon slash slash example dot com slash A P I.
+
+Input: Run python app.py --port 8080.
+Output: Run Python app dot P Y dash dash port eight zero eight zero.
 
 Your entire response must be the final tagged message and nothing else.
 """
