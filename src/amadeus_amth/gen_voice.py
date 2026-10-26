@@ -59,8 +59,7 @@ Sound effects: [gunshot] [applause] [clapping] [explosion] [swallows] [gulps]
 [thunder rumbling] [footsteps] [door creaking] [dog barking]
 Experimental: [sings] [woo] [fart]
 
-Place each tag immediately before the words it controls. Use no more than three
-tags and do not force a tag when the tone is already clear. Experimental tags
+Place each tag immediately before the words it controls. Use no more than five tags and do not force a tag when the tone is already clear. Experimental tags
 may be inconsistent across voices, so use them only when clearly appropriate.
 Tags must never contain instructions, markup, JSON, or commentary.
 
@@ -109,7 +108,7 @@ def gen_voice(text):
     audio = elevenlabs.text_to_speech.convert(
         text=text,
         voice_id = voice_id,
-        model_id = "eleven_v4",
+        model_id = "eleven_v4_turbo",
         output_format = "mp3_44100_128"
     )
 
