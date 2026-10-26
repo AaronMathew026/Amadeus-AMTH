@@ -96,6 +96,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "chromadb" },
+    { name = "elevenlabs" },
     { name = "fastapi", extra = ["standard"] },
     { name = "ollama" },
     { name = "python-dotenv" },
@@ -105,6 +106,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "chromadb", specifier = ">=1.5.9" },
+    { name = "elevenlabs", specifier = ">=2.0.0" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.141.1" },
     { name = "ollama", specifier = ">=0.6.2" },
     { name = "python-dotenv", specifier = ">=1.2.3" },
@@ -404,6 +406,23 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/b0/5d/5f8571bd5dedc80863191621ac4be001f3f3dd8315d2ec078705dab7dec1/durationpy-0.11.tar.gz", hash = "sha256:181898e1ae282e288f0a2291829656bf1b6b3aadf30a97993b85db4943642905", size = 3582, upload-time = "2026-08-26T13:56:00.991Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e6/c4/ebdf7837bc4ef6fd98cfb013c28855bb358467bf86c1af011bbc21e21df0/durationpy-0.11-py3-none-any.whl", hash = "sha256:a739fe2b8972c250ff72f8e2c488d18cf25f7b852f49ee76048775d5171df30c", size = 4133, upload-time = "2026-08-26T13:55:59.456Z" },
+]
+
+[[package]]
+name = "elevenlabs"
+version = "2.74.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "pydantic-core" },
+    { name = "requests" },
+    { name = "typing-extensions" },
+    { name = "websockets" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/2e/03/b53b9d46dc6e682aa5595059d8035193405715613ad38eed69a1e609e047/elevenlabs-2.74.1.tar.gz", hash = "sha256:7f7159e8c079b753363b387b4e6a8c0d3b413df2adb435eec3befd4ea8f48e1f", size = 884448, upload-time = "2026-10-20T13:25:28.714Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b6/3b/100069b49ee9ae7eea63c57e97beb84143dcb607645e0357688ffe1674e2/elevenlabs-2.74.1-py3-none-any.whl", hash = "sha256:e94380ea301cb2324ec6daf05f0cf567ac9831454ca3f1fa7cfdb62d48705d27", size = 2320472, upload-time = "2026-10-20T13:25:26.301Z" },
 ]
 
 [[package]]
