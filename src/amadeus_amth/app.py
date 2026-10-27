@@ -18,6 +18,7 @@ from .agent import (
     Amadeus,
     DEFAULT_HOUSEKEEPING_PROMPT,
 )
+from . import emotion, uploads
 from .models import ChatRequest, HousekeepingPromptRequest, MaxIterationsRequest
 from .tools.workspace_tool import WORKSPACE_ROOT
 
@@ -67,7 +68,7 @@ async def heartbeat(agent: Amadeus):
             # so it is never mistaken for a user-facing answer.
             # Read per beat, not once at startup: an edit from the settings
             # panel takes effect on the next sweep.
-            reply = await agent.chat(agent.housekeeping_prompt)
+            reply = await agent.chat(agent.housekeeping_prompt, speak=False)
             append_log("Amadeus", f"(housekeeping beat) {reply}")
 
 
@@ -95,6 +96,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+app.include_router(uploads.router)
+app.include_router(emotion.router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -105,10 +108,13 @@ app.add_middleware(
 
 @app.post("/chat")
 async def chat(request: ChatRequest):
-    append_log("User", request.message)
-    reply = await app.state.agent.chat(request.message)
+    attached = "".join(f"\n📎 {name}" for name in request.files)
+    append_log("User", request.message + attached)
+    reply = await app.state.agent.chat(
+        uploads.attach(request.message, request.files), speak=request.speak
+    )
     append_log("Amadeus", reply)
-    return {"response": reply, "audio": "/voice/output.mp3"}
+    return {"response": reply, "audio": "/voice/output.mp3" if request.speak else None}
 
 
 @app.get("/voice/output.mp3")

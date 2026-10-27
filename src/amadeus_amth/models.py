@@ -5,6 +5,10 @@ from .agent import MAX_ITERATIONS_LIMIT, MIN_ITERATIONS
 
 class ChatRequest(BaseModel):
     message: str
+    # Names returned by POST /upload for files attached to this message.
+    files: list[str] = []
+    # False when voice is switched off in the UI: no TTS (ElevenLabs) calls at all.
+    speak: bool = True
 
 
 class MaxIterationsRequest(BaseModel):
