@@ -28,6 +28,7 @@ VOICE_PATH = WORKSPACE_ROOT.parent / "voice" / "output.mp3"
 
 # Each turn starts with "[HH:MM] User: " or "[HH:MM] Amadeus: "; any line that
 # doesn't is a continuation of a multi-line message.
+HOUSEKEEPING_MARK = "(housekeeping beat)"
 TURN_HEADER = re.compile(r"^\[(\d{2}:\d{2})\] (User|Amadeus): ?(.*)$")
 
 
@@ -55,7 +56,8 @@ def read_log() -> list[dict]:
                 turns.append({"role": "user" if speaker == "User" else "bot", "time": time, "text": text})
             elif turns:
                 turns[-1]["text"] += "\n" + line
-    return turns
+    # Heartbeat sweeps stay in the log file but never reach the chat UI.
+    return [t for t in turns if HOUSEKEEPING_MARK not in t["text"]]
 
 async def heartbeat(agent: Amadeus):
     while True:
@@ -69,7 +71,7 @@ async def heartbeat(agent: Amadeus):
             # Read per beat, not once at startup: an edit from the settings
             # panel takes effect on the next sweep.
             reply = await agent.chat(agent.housekeeping_prompt, speak=False)
-            append_log("Amadeus", f"(housekeeping beat) {reply}")
+            append_log("Amadeus", f"{HOUSEKEEPING_MARK} {reply}")
 
 
             # await is used to ensure we dont block the event loop

@@ -138,6 +138,12 @@ body.thinking .status.online i { background: var(--amber); }
 .md th, .md td { padding: 6px 10px; border: 1px solid var(--line); text-align: left; }
 .md th { background: var(--panel-hi); font: 600 .85em var(--mono); letter-spacing: .06em; }
 
+/* math (KaTeX) */
+.md .math.display { display: block; margin: .7em 0; overflow-x: auto; overflow-y: hidden; text-align: center; scrollbar-width: thin; }
+.md .katex { font-size: 1.1em; }
+.md .math.display .katex-display { margin: 0; }
+.md .math:not(.display) { white-space: nowrap; }
+
 /* ---- empty state ---- */
 .empty { margin: 8vh 0 0; font: 13px/1.7 var(--mono); color: var(--muted); }
 .empty h2 { margin: 0 0 8px; font: 600 22px/1.2 var(--mono); letter-spacing: .04em; color: var(--text); }
