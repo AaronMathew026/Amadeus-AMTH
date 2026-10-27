@@ -24,7 +24,11 @@ class LongTermMemory:
         """Return the embedding vector for a single piece of text, or None on failure."""
 
         try:
-            embed_response = self.client.embed(model=EMBEDDING_MODEL, input=[text])
+            # keep_alive stops Ollama unloading bge-m3 after the default 5
+            # minutes, which made the first message after a pause pay a model load.
+            embed_response = self.client.embed(
+                model=EMBEDDING_MODEL, input=[text], keep_alive="1h"
+            )
             return embed_response.embeddings[0]
         except Exception as e:
             print(f"Error during embedding: {e}")

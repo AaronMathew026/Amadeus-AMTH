@@ -21,6 +21,9 @@ class STR_Memory():
         # exchange lands must be atomic, so a condense can never slice it and
         # no other writer can interleave its messages.
         self._lock = asyncio.Lock()
+        # Held so the background condense isn't garbage-collected mid-flight,
+        # and so only one runs at a time.
+        self._condense_task = None
         self.memory = []
         self.memory.append({"role": "system", "content": sys_prompt})
 
@@ -36,8 +39,18 @@ class STR_Memory():
         that a model round-trip is about to answer.
         """
         async with self._lock:
-            if len(self.memory) + len(exchange) >= self.max_memory_size:
-                await self.condense_memory()
+            # Condensing is a model round-trip, so it runs in the background
+            # instead of delaying this reply. The snapshot is taken now, before
+            # the exchange lands, so the new exchange stays out of the summary
+            # and sits after it, exactly as when this awaited the condense.
+            if (
+                len(self.memory) + len(exchange) >= self.max_memory_size
+                and (self._condense_task is None or self._condense_task.done())
+            ):
+                snapshot = self.memory[1:]
+                self._condense_task = asyncio.create_task(
+                    self.condense_memory(snapshot)
+                )
             self.memory.extend(exchange)
 
     def get_memory(self):
@@ -45,13 +58,11 @@ class STR_Memory():
         return list(self.memory)
 
 
-    async def condense_memory(self):
-        # Snapshot BEFORE the await: summarize exactly this slice. With
-        # commit holding the lock this equals the old clear_memory()
-        # wipe, but the invariant now lives here instead of trusting every
-        # caller — and a lock-bypassing late arrival would land AFTER the
-        # summary instead of being deleted unseen.
-        snapshot = self.memory[1:]
+    async def condense_memory(self, snapshot):
+        # `snapshot` is the slice commit() captured: summarize exactly that,
+        # and later delete exactly that — anything appended while the
+        # round-trip is in flight lands AFTER the summary instead of being
+        # deleted unseen.
         transcript = "\n".join(
             f"{m.get('role')}: {m.get('content', '')}" for m in snapshot
         )
