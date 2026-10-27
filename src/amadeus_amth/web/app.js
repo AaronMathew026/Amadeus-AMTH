@@ -379,20 +379,69 @@ function addTurn(role, text, time = clock()) {
     bubble.innerHTML = '<span class="typing" aria-label="Amadeus is typing"><i></i><i></i><i></i></span>';
   } else {
     setBody(bubble, text, role === "bot");
+    turn.dataset.text = text;
   }
   log.append(turn);
+  syncReplay();
   tMsgs.textContent = ++turnCount;
   scrollDown();
   return bubble;
 }
 
+// Only the newest few replies can be replayed; the server keeps just that many clips.
+const REPLAY_LIMIT = 5;
+
+function syncReplay() {
+  const replies = [...log.querySelectorAll(".turn.bot[data-text]:not(.error)")].slice(-REPLAY_LIMIT);
+  for (const turn of log.querySelectorAll(".turn.bot")) {
+    const btn = turn.querySelector(".replay");
+    if (replies.includes(turn)) {
+      if (btn) continue;
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "replay";
+      b.title = "Replay voice";
+      b.setAttribute("aria-label", "Replay voice");
+      b.textContent = "▶ REPLAY";
+      turn.querySelector(".tag").append(b);
+    } else btn?.remove();
+  }
+}
+
+log.addEventListener("click", async (e) => {
+  const btn = e.target.closest(".replay");
+  if (!btn || btn.disabled) return;
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "… LOADING";
+  try {
+    const r = await fetch("/voice/replay", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: btn.closest(".turn").dataset.text }),
+    });
+    const { audio } = await r.json();
+    if (!audio) throw new Error("no audio");
+    voicePlayer.src = `${audio}?t=${Date.now()}`;
+    await voicePlayer.play();
+  } catch {
+    btn.textContent = "✕ FAILED";
+    await new Promise((res) => setTimeout(res, 1500));
+  } finally {
+    btn.textContent = label;
+    btn.disabled = false;
+  }
+});
+
 function fill(bubble, text, isError) {
   setBody(bubble, text, !isError);
   const turn = bubble.closest(".turn");
+  if (!isError) turn.dataset.text = text;
   if (isError) {
     turn.classList.add("error");
     turn.querySelector("b").textContent = "ERROR";
   }
+  syncReplay();
   turn.querySelector("time").textContent = clock();
 }
 

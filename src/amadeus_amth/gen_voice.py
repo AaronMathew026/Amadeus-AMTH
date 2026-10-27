@@ -1,6 +1,8 @@
 from dotenv import load_dotenv
 from elevenlabs import ElevenLabs
+import hashlib
 import os
+import shutil
 from pathlib import Path
 import ollama
 
@@ -107,20 +109,44 @@ def auto_tag(text):
 
 
 
+VOICE_DIR = Path(__file__).resolve().parents[2] / "voice"
+# Replies whose audio is kept for replay; older ones are deleted.
+KEEP_REPLAYS = 5
+
+
+def voice_id_for(text):
+    return hashlib.sha1(text.strip().encode("utf-8")).hexdigest()[:16]
+
+
+def replay_path(clip_id):
+    return VOICE_DIR / f"{clip_id}.mp3"
+
+
+def _prune():
+    clips = sorted(VOICE_DIR.glob("????????????????.mp3"), key=lambda p: p.stat().st_mtime, reverse=True)
+    for old in clips[KEEP_REPLAYS:]:
+        old.unlink(missing_ok=True)
+
+
 def gen_voice(text):
-    text = auto_tag(text)
+    """Speak `text`, keep the clip for replay, and return its id."""
+    text_id = voice_id_for(text)
+    spoken = auto_tag(text)
     audio = elevenlabs.text_to_speech.convert(
-        text=text,
+        text=spoken,
         voice_id = voice_id,
         model_id = "eleven_v4_turbo",
         output_format = "mp3_44100_128"
     )
 
-    output_path = Path(__file__).resolve().parents[2] / "voice" / "output.mp3"
-    output_path.parent.mkdir(exist_ok=True)
-    with output_path.open("wb") as f:
+    VOICE_DIR.mkdir(exist_ok=True)
+    clip = replay_path(text_id)
+    with clip.open("wb") as f:
         for chunk in audio:
             f.write(chunk)
+    shutil.copyfile(clip, VOICE_DIR / "output.mp3")
+    _prune()
+    return text_id
 
 
 if __name__ == "__main__":
