@@ -38,6 +38,22 @@ DEFAULT_SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT") or (
     "informative, and engaging for the user."
 )
 
+# What the web UI can render (web/app.js). Kept here rather than in .env so
+# changing SYSTEM_PROMPT can't silently drop it; the two have to agree.
+FORMAT_GUIDE = (
+    "Formatting: your replies are shown in a web UI that renders Markdown and "
+    "LaTeX math (KaTeX). Write every mathematical expression as LaTeX, never as "
+    "plain-text or Unicode approximations. Inline math goes between single "
+    "dollar signs with no space inside them, e.g. $T(n) \\le c\\lg n$. Display "
+    "equations go between double dollar signs, each delimiter on its own line "
+    "or the whole formula on one line, e.g. $$T(n) = T(\\lceil n/2 \\rceil) + 1$$. "
+    "Use standard commands (\\lceil, \\le, \\frac{a}{b}, \\sum_{i=1}^{n}, "
+    "\\log_2) and do not put math inside backticks or code blocks; reserve those "
+    "for code. Write a literal dollar sign for money as plain text (\"$5\"), "
+    "not as math. Use Markdown for everything else (headings, lists, tables, "
+    "bold)."
+)
+
 # What the hourly heartbeat sends itself. Editable from the settings panel;
 # reset_housekeeping_prompt() puts this value back.
 DEFAULT_HOUSEKEEPING_PROMPT = os.getenv("HOUSEKEEPING_PROMPT") or (
@@ -84,7 +100,7 @@ class Amadeus:
         # level is fixed at import time: the model is told what it may run
         # before it starts guessing and getting refused.
         self.system_prompt = "\n\n".join(
-            [system_prompt, terminal_linux.describe_access(), startup_message]
+            [system_prompt, FORMAT_GUIDE, terminal_linux.describe_access(), startup_message]
         )
         self.str_mem = STR_Memory(self.system_prompt, self.model, self.client)
         self.lt_mem = LongTermMemory()
