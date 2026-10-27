@@ -95,6 +95,9 @@ body.thinking .status.online i { background: var(--amber); }
 .tag b { font-weight: 600; }
 .turn.user .tag b { color: var(--amber); }
 .turn.bot .tag b { color: var(--accent); }
+.tag .replay { margin-left: auto; padding: 0; border: 0; background: transparent; cursor: pointer; color: var(--muted); font: inherit; letter-spacing: inherit; opacity: .6; }
+.tag .replay:hover:not(:disabled) { color: var(--accent); opacity: 1; }
+.tag .replay:disabled { cursor: default; }
 .turn.error .tag b { color: var(--danger); }
 .bubble { white-space: pre-wrap; overflow-wrap: anywhere; }
 .turn.error .bubble { color: #ffb3bb; }
