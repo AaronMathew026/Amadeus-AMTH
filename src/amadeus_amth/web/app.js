@@ -31,8 +31,9 @@ const QUOTE = /^ {0,3}> ?/;
 const LI = /^(\s*)([-*+]|\d{1,9}[.)])\s+(.*)$/;
 const TABLE_SEP = /^\s*\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?\s*$/;
 const isTable = (l, next = "") => l.includes("|") && next.includes("|") && TABLE_SEP.test(next);
+const MATH_OPEN = /^ {0,3}(\$\$|\\\[)/;
 const isStart = (l, next) =>
-  FENCE.test(l) || HEADING.test(l) || HR.test(l) || QUOTE.test(l) || LI.test(l) || isTable(l, next);
+  FENCE.test(l) || MATH_OPEN.test(l) || HEADING.test(l) || HR.test(l) || QUOTE.test(l) || LI.test(l) || isTable(l, next);
 
 function emphasis(s) {
   return s
@@ -42,6 +43,33 @@ function emphasis(s) {
     .replace(/\*(?=\S)([^*\n]*?\S)\*/g, "<em>$1</em>")
     .replace(/(?<![\w\\])_(?=\S)([^_\n]*?\S)_(?!\w)/g, "<em>$1</em>")
     .replace(/~~(?=\S)([\s\S]*?\S)~~/g, "<del>$1</del>");
+}
+
+// ---- math ----
+// The agent writes LaTeX: $...$ and \(...\) inline, $$...$$ and \[...\] for
+// display. The renderer only emits an escaped placeholder carrying the source;
+// renderMath() hands those to KaTeX once the HTML is in the DOM, so a missing
+// KaTeX degrades to readable TeX instead of broken markup.
+const unesc = (s) => s.replace(/&(?:amp|lt|gt|quot|#39);/g, (e) =>
+  ({ "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&#39;": "'" })[e]);
+const mathHtml = (tex, display, tag = "span") => {
+  const t = tex.trim(), open = display ? "$$" : "$";
+  return `<${tag} class="math${display ? " display" : ""}" data-tex="${esc(t)}">${esc(open + t + open)}</${tag}>`;
+};
+
+// A display block spanning whole lines: "$$ x $$" on one line, or an opening
+// "$$" line, the formula, and a closing "$$" line. Returns null if unclosed.
+function displayMath(lines, i) {
+  const m = lines[i].match(MATH_OPEN);
+  if (!m) return null;
+  const close = m[1] === "$$" ? "$$" : "\\]";
+  let body = lines[i].slice(m[0].length);
+  for (let j = i; ; ) {
+    const at = body.indexOf(close);
+    if (at >= 0) return body.slice(at + close.length).trim() ? null : { tex: body.slice(0, at), next: j + 1 };
+    if (++j >= lines.length || !lines[j].trim()) return null;
+    body += "\n" + lines[j];
+  }
 }
 
 // Finished fragments are parked in `stash` behind \0n\0 markers, so later
@@ -54,6 +82,13 @@ function inline(src) {
 
   s = s.replace(/(`+)([^`]|[^`][\s\S]*?[^`])\1(?!`)/g,
     (_, _t, code) => put(`<code>${code.replace(/^ ([\s\S]*) $/, "$1")}</code>`));
+  // Before the escape rule below, which would eat the backslashes in TeX.
+  s = s.replace(/\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]/g, (_, a, b) => put(mathHtml(unesc(a ?? b), true)));
+  s = s.replace(/\\\(([\s\S]+?)\\\)/g, (_, t) => put(mathHtml(unesc(t), false)));
+  // Pandoc's rule keeps "$5 and $10" as prose: no space inside the delimiters,
+  // and the closing $ is not followed by a digit.
+  s = s.replace(/(?<![\\$\w])\$(?=[^\s$])((?:\\[\s\S]|[^$\\\n])+?)(?<=\S)\$(?![\d$])/g,
+    (_, t) => put(mathHtml(unesc(t), false)));
   s = s.replace(/\\([\\`*_{}\[\]()#+\-.!~|])/g, (_, c) => put(c));
   s = s.replace(/!\[([^\]]*)\]\(\s*([^\s)]+)(?:\s+&quot;([\s\S]*?)&quot;)?\s*\)/g, (m, alt, url, title) => {
     const u = safeUrl(url, true);
@@ -145,7 +180,11 @@ function blocks(lines) {
     const line = lines[i];
     if (!line.trim()) { i++; continue; }
 
-    if ((m = line.match(FENCE))) {
+    let dm;
+    if ((dm = displayMath(lines, i))) {
+      out += mathHtml(dm.tex, true, "div");
+      i = dm.next;
+    } else if ((m = line.match(FENCE))) {
       const close = new RegExp(`^ {0,3}${m[1][0]}{${m[1].length},}\\s*$`), code = [];
       for (i++; i < lines.length && !close.test(lines[i]); i++) code.push(lines[i]);
       i++;
@@ -183,10 +222,22 @@ function blocks(lines) {
 
 const markdown = (text) => blocks(text.replace(/\r\n?/g, "\n").split("\n"));
 
+function renderMath(root) {
+  if (!window.katex) return;
+  for (const el of root.querySelectorAll(".math")) {
+    try {
+      katex.render(el.dataset.tex, el, { displayMode: el.classList.contains("display"), throwOnError: false });
+    } catch {}
+  }
+}
+
 // Replies are rendered; the user's own messages and errors stay verbatim.
 function setBody(bubble, text, rich) {
   bubble.classList.toggle("md", rich);
-  if (rich) bubble.innerHTML = markdown(text);
+  if (rich) {
+    bubble.innerHTML = markdown(text);
+    renderMath(bubble);
+  }
   else bubble.textContent = text;
 }
 
