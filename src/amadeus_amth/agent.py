@@ -204,8 +204,11 @@ class Amadeus:
             "record — please send that again.)"
         )
 
-    async def chat(self, user_message: str):
-        """Answer the user, letting the model use the workspace tools as it goes."""
+    async def chat(self, user_message: str, speak: bool = True):
+        """Answer the user, letting the model use the workspace tools as it goes.
+
+        `speak=False` skips voice generation — the heartbeat has no listener,
+        and the TTS round-trips would only overwrite the user's last audio."""
         # The loop talks to the model on top of `base`, a snapshot of shared
         # memory, and keeps its own turns in `turns` until the exchange is
         # finished. The hourly heartbeat and a user /chat share one agent and
@@ -216,7 +219,9 @@ class Amadeus:
         # A finished exchange, committed in one piece, can never split.
         base = self.str_mem.get_memory()
         timestamp = str(datetime.now())
-        context = self.lt_mem.retrieve_memory(user_message)
+        # Sync Ollama + Chroma calls: off the event loop so /health and other
+        # requests are not frozen while the embedding runs.
+        context = await asyncio.to_thread(self.lt_mem.retrieve_memory, user_message)
         if context:
             user_message += f"\n\nContext from long-term memory:\n{context}"
         turns = [{"role": "user", "content": f"[{timestamp}] {user_message}"}]
@@ -239,11 +244,12 @@ class Amadeus:
                 reply = await self._finalize_reply(message, base + turns)
                 turns.append({"role": "assistant", "content": reply})
                 await self.str_mem.commit(turns)
-                try:
-                    await asyncio.to_thread(gen_voice.gen_voice, reply)
-                except Exception as e:
-                    print(f"[voice] Generation failed: {e!r}")
-                print(f"Generated voice for reply: {reply}")
+                if speak:
+                    try:
+                        await asyncio.to_thread(gen_voice.gen_voice, reply)
+                    except Exception as e:
+                        print(f"[voice] Generation failed: {e!r}")
+                    print(f"Generated voice for reply: {reply}")
                 return reply
 
             # The model's turn joins this chat's local exchange so that on the
@@ -253,13 +259,20 @@ class Amadeus:
                 turn["content"] = strip_reasoning(turn["content"])
             turns.append(turn)
 
-            for call in message.tool_calls:
-                # Tools block on shells, pty waits and file IO — run them in a
-                # worker thread so /chat and /health keep answering while a
-                # long command runs, instead of stalling the event loop.
-                content = await asyncio.to_thread(
-                    self.run_tool, call.function.name, call.function.arguments
+            # Tools block on shells, pty waits and file IO — run them in worker
+            # threads so /chat and /health keep answering while a long command
+            # runs, and run a turn's calls together instead of one by one.
+            # gather returns results in call order, so the tool turns still
+            # line up with the calls that asked for them.
+            results = await asyncio.gather(
+                *(
+                    asyncio.to_thread(
+                        self.run_tool, call.function.name, call.function.arguments
+                    )
+                    for call in message.tool_calls
                 )
+            )
+            for call, content in zip(message.tool_calls, results):
                 turns.append(
                     {
                         "role": "tool",

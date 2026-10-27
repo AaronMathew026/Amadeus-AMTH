@@ -109,7 +109,7 @@ def gen_voice(text):
     audio = elevenlabs.text_to_speech.convert(
         text=text,
         voice_id = voice_id,
-        model_id = "eleven_v4",
+        model_id = "eleven_v4_turbo",
         output_format = "mp3_44100_128"
     )
 
