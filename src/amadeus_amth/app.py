@@ -18,7 +18,7 @@ from .agent import (
     Amadeus,
     DEFAULT_HOUSEKEEPING_PROMPT,
 )
-from . import emotion, uploads
+from . import emotion, gen_voice, uploads
 from .models import ChatRequest, HousekeepingPromptRequest, MaxIterationsRequest
 from .tools.workspace_tool import WORKSPACE_ROOT
 
@@ -119,12 +119,42 @@ async def chat(request: ChatRequest):
     return {"response": reply, "audio": "/voice/output.mp3" if request.speak else None}
 
 
+class ReplayRequest(BaseModel):
+    text: str
+
+
+@app.post("/voice/replay")
+async def voice_replay(request: ReplayRequest):
+    """Audio for a reply the user wants to hear again. Clips of the last few
+    spoken replies are cached, so those cost nothing; anything else is
+    generated once and then cached too."""
+    text = request.text.strip()
+    if not text:
+        return {"error": "Nothing to speak."}
+    clip_id = gen_voice.voice_id_for(text)
+    if not gen_voice.replay_path(clip_id).is_file():
+        try:
+            await asyncio.to_thread(gen_voice.gen_voice, text)
+        except Exception as e:
+            print(f"[voice] Replay generation failed: {e!r}")
+            return {"error": "Voice generation failed."}
+    return {"audio": f"/voice/{clip_id}.mp3"}
+
+
 @app.get("/voice/output.mp3")
 def voice_output():
     if not VOICE_PATH.is_file():
         return {"error": "No generated voice is available."}
     return FileResponse(VOICE_PATH, media_type="audio/mpeg")
 
+
+
+@app.get("/voice/{clip_id}.mp3")
+def voice_clip(clip_id: str):
+    path = gen_voice.replay_path(clip_id)
+    if not re.fullmatch(r"[0-9a-f]{16}", clip_id) or not path.is_file():
+        return {"error": "No generated voice is available."}
+    return FileResponse(path, media_type="audio/mpeg")
 
 
 @app.get("/health")
