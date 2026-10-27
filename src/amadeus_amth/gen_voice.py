@@ -12,7 +12,7 @@ ollama = ollama.Client()
 
 elevenlabs = ElevenLabs(api_key=os.getenv("ELEVEN_LABS_API_KEY"))
 voice_id = os.getenv("VOICE_ID") or "21m00Tcm4TlvDq8ikWAM"
-TAGGING_PROMPT = """
+TAGGING_PROMPT = r"""
 You are an ElevenLabs audio-tagging assistant.
 
 Rewrite the user's message for natural speech by inserting short audio-performance
@@ -34,6 +34,10 @@ Speech formatting rules:
 - Make URLs, email addresses, paths, command flags, and code readable aloud
     without inventing content. For example, "docs/api/v1" may become
     "docs slash A P I slash v one".
+- Read LaTeX math as spoken mathematics and drop the dollar signs and
+    backslashes: "$T(n) \le c\lg n$" becomes "T of n is less than or equal to
+    c log base two of n", and "\lceil n/2 \rceil" becomes "the ceiling of n
+    over two".
 - Keep product names, proper nouns, code identifiers, and quoted text intact
     unless changing only their spoken pronunciation is necessary.
 - Do not spell out ordinary words, and do not convert the message into Markdown,
