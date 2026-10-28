@@ -1,10 +1,11 @@
 import ollama
 import requests
 from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 import asyncio
 import contextlib
+import json
 import re
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -19,7 +20,12 @@ from .agent import (
     DEFAULT_HOUSEKEEPING_PROMPT,
 )
 from . import emotion, gen_voice, uploads
-from .models import ChatRequest, HousekeepingPromptRequest, MaxIterationsRequest
+from .models import (
+    ChatModeRequest,
+    ChatRequest,
+    HousekeepingPromptRequest,
+    MaxIterationsRequest,
+)
 from .tools.workspace_tool import WORKSPACE_ROOT
 
 WEB_DIR = Path(__file__).parent / "web"
@@ -69,8 +75,10 @@ async def heartbeat(agent: Amadeus):
             # missing 08:29 sweep entry of 2026-09-15). Log the reply, marked
             # so it is never mistaken for a user-facing answer.
             # Read per beat, not once at startup: an edit from the settings
-            # panel takes effect on the next sweep.
-            reply = await agent.chat(agent.housekeeping_prompt, speak=False)
+            # panel takes effect on the next sweep. Always the full agent,
+            # whatever the panel's chat mode: the sweep files what it finds in
+            # long-term memory, and the terminal mode has no tool for that.
+            reply = await agent.chat(agent.housekeeping_prompt, speak=False, mode="full")
             append_log("Amadeus", f"{HOUSEKEEPING_MARK} {reply}")
 
 
@@ -108,23 +116,81 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.post("/chat")
-async def chat(request: ChatRequest):
+async def run_chat(request: ChatRequest, on_event=None) -> dict:
+    """One exchange, for /chat and /chat/stream alike: log it, answer it, and
+    point at the reply's voice."""
     attached = "".join(f"\n📎 {name}" for name in request.files)
     append_log("User", request.message + attached)
-    reply = await app.state.agent.chat(
-        uploads.attach(request.message, request.files), speak=request.speak
-    )
+    # Extracting an attachment's text (a PDF especially) is blocking work.
+    message = await asyncio.to_thread(uploads.attach, request.message, request.files)
+    reply = await app.state.agent.chat(message, speak=request.speak, on_event=on_event)
     append_log("Amadeus", reply)
     # Point at this reply's own clip, not output.mp3: when voice generation
     # fails or a path returns without speaking, output.mp3 still holds the
-    # previous reply, and the UI would play that as if it were this one.
+    # previous reply, and the UI would play that as if it were this one. The
+    # clip is usually still being generated at this point — the text no
+    # longer waits for its voice — and GET /voice/<id>.mp3 waits for it.
     audio = None
     if request.speak:
         clip_id = gen_voice.voice_id_for(reply)
-        if gen_voice.replay_path(clip_id).is_file():
+        if gen_voice.has_clip(clip_id):
             audio = f"/voice/{clip_id}.mp3"
     return {"response": reply, "audio": audio}
+
+
+@app.post("/chat")
+async def chat(request: ChatRequest):
+    return await run_chat(request)
+
+
+# Exchanges running for /chat/stream. Each runs as its own task rather than
+# inside the response, so a browser dropping the connection mid-reply (a phone
+# locking, a tab closing) does not cancel it: the reply is still committed and
+# logged, and turns up from /history on the next load. Held here because the
+# event loop keeps only weak references to tasks.
+_streaming = set()
+
+
+@app.post("/chat/stream")
+async def chat_stream(request: ChatRequest):
+    """/chat as it happens, as newline-delimited JSON — one event per line:
+
+    {"type": "delta", "text"}       more of the reply being written
+    {"type": "replace", "text"}     the reply so far, rewritten from scratch
+    {"type": "tools", "names"}      that turn ended in tool calls, now running;
+                                    its text was not the reply
+    {"type": "done", "response", "audio"}   the finished reply, as /chat returns it
+    {"type": "error", "message"}    the exchange failed
+    """
+    events = asyncio.Queue()
+
+    async def run():
+        try:
+            result = await run_chat(request, on_event=events.put_nowait)
+        except Exception as e:
+            print(f"[chat] Streamed exchange failed: {e!r}")
+            events.put_nowait({"type": "error", "message": f"server error: {e!r}"})
+        else:
+            events.put_nowait({"type": "done", **result})
+
+    task = asyncio.create_task(run())
+    _streaming.add(task)
+    task.add_done_callback(_streaming.discard)
+
+    async def lines():
+        while True:
+            event = await events.get()
+            yield json.dumps(event) + "\n"
+            if event["type"] in ("done", "error"):
+                return
+
+    # A proxy in front (nginx and friends) buffers responses by default,
+    # which would hold every line back until the reply was finished.
+    return StreamingResponse(
+        lines(),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 class ReplayRequest(BaseModel):
@@ -139,13 +205,11 @@ async def voice_replay(request: ReplayRequest):
     text = request.text.strip()
     if not text:
         return {"error": "Nothing to speak."}
-    clip_id = gen_voice.voice_id_for(text)
-    if not gen_voice.replay_path(clip_id).is_file():
-        try:
-            await asyncio.to_thread(gen_voice.gen_voice, text)
-        except Exception as e:
-            print(f"[voice] Replay generation failed: {e!r}")
-            return {"error": "Voice generation failed."}
+    # A reply whose voice is still on its way joins that generation instead
+    # of paying for a second one.
+    clip_id = gen_voice.speak(text)
+    if await gen_voice.clip_path(clip_id) is None:
+        return {"error": "Voice generation failed."}
     return {"audio": f"/voice/{clip_id}.mp3"}
 
 
@@ -158,9 +222,13 @@ def voice_output():
 
 
 @app.get("/voice/{clip_id}.mp3")
-def voice_clip(clip_id: str):
-    path = gen_voice.replay_path(clip_id)
-    if not re.fullmatch(r"[0-9a-f]{16}", clip_id) or not path.is_file():
+async def voice_clip(clip_id: str):
+    if not re.fullmatch(r"[0-9a-f]{16}", clip_id):
+        return {"error": "No generated voice is available."}
+    # A reply's clip is asked for the moment its text arrives, usually before
+    # the clip is finished; the request waits for it rather than failing.
+    path = await gen_voice.clip_path(clip_id)
+    if path is None:
         return {"error": "No generated voice is available."}
     return FileResponse(path, media_type="audio/mpeg")
 
@@ -183,6 +251,12 @@ def settings_payload() -> dict:
         "housekeeping_prompt_is_default": (
             agent.housekeeping_prompt == DEFAULT_HOUSEKEEPING_PROMPT
         ),
+        "chat_mode": agent.chat_mode,
+        # What each mode runs, so the panel can name the models.
+        "chat_modes": {
+            name: {"label": mode.label, "model": mode.model, "tools": len(mode.schemas)}
+            for name, mode in agent.modes.items()
+        },
     }
 
 
@@ -208,6 +282,12 @@ def set_housekeeping_prompt(request: HousekeepingPromptRequest):
 @app.post("/settings/housekeeping-prompt/reset")
 def reset_housekeeping_prompt():
     app.state.agent.reset_housekeeping_prompt()
+    return settings_payload()
+
+
+@app.post("/settings/chat-mode")
+def set_chat_mode(request: ChatModeRequest):
+    app.state.agent.change_chat_mode(request.mode)
     return settings_payload()
 
 @app.get("/history")

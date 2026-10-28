@@ -34,8 +34,12 @@ class EmotionRequest(BaseModel):
 
 async def classify(text: str) -> str:
     try:
+        # Picking one name off a list needs little reasoning: on "low" beam
+        # chose the same face as on its default effort in every test, in
+        # half the time (1.7 s against 3.5 s on average).
         response = await client.chat(
             model="beam:cloud",
+            think="low",
             messages=[
                 {"role": "system", "content": PROMPT},
                 {"role": "user", "content": text[:MAX_CHARS]},
