@@ -1,5 +1,6 @@
 import asyncio
 import os
+from dataclasses import dataclass
 
 import ollama
 from dotenv import load_dotenv
@@ -26,9 +27,11 @@ DEFAULT_MAX_ITERATIONS = int(os.getenv("MAX_ITERATIONS") or 20)
 MIN_ITERATIONS = 1
 MAX_ITERATIONS_LIMIT = 100
 
-# Defaults live in .env (BASE_MODEL, SYSTEM_PROMPT) so they can be changed
-# without touching the code; the literals below are the fallback.
+# Defaults live in .env (BASE_MODEL, TERMINAL_MODEL, SYSTEM_PROMPT) so they can
+# be changed without touching the code; the literals below are the fallback.
 DEFAULT_MODEL = os.getenv("BASE_MODEL") or "gemma4:31b-cloud"
+# The model behind the terminal chat mode (see Amadeus.modes).
+TERMINAL_MODEL = os.getenv("TERMINAL_MODEL") or "beam:cloud"
 DEFAULT_SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT") or (
     "You are Amadeus, Aaron's personal AI partner. Who you are — your "
     "personality, voice and boundaries — is set out in IDENTITY.md and SOUL.md "
@@ -99,6 +102,44 @@ DEFAULT_HOUSEKEEPING_PROMPT = os.getenv("HOUSEKEEPING_PROMPT") or (
     "anything important, scanning earlier conversations for anything important etc."
 )
 
+# The long-term memory lookup embeds the user's message with bge-m3, which runs
+# on the CPU here and slows with the length of its input: ~0.5 s for 1,000
+# characters, ~6 s for 8,000. An attached file is inlined into the message, so
+# an upload alone could hold the reply up for seconds. The opening of a message
+# says what it is about, which is all the lookup needs.
+MEMORY_QUERY_CHARS = 1000
+
+# The mode a fresh process answers in; the settings panel switches it.
+DEFAULT_CHAT_MODE = "full"
+
+# The terminal mode shares its conversation with the full agent, so the history
+# it is sent can show calls to tools it does not have. Told up front, the model
+# goes straight to the shell instead of spending a round on a refused call.
+TERMINAL_MODE_NOTE = (
+    "You are in terminal mode: your only tools are the terminal ones, "
+    "run_command and the terminal_* session tools. Do everything through the "
+    "shell, reading, writing and searching files included. Earlier turns may "
+    "show other tools (file, memory or notification tools); they are not "
+    "available in this mode, so do not call them."
+)
+
+
+@dataclass(frozen=True)
+class ChatMode:
+    """One way of answering: the model that runs it and the tools it may call.
+
+    Every mode commits to the same STR_Memory and gets the same long-term
+    memory lookup, so switching mid-conversation keeps the thread; only the
+    model and the toolbox change.
+    """
+
+    label: str
+    model: str
+    schemas: list
+    functions: dict
+    # Appended to the system prompt for this mode only.
+    note: str = ""
+
 
 # Some thinking models (glm, deepseek-r1 and friends) leak their reasoning into
 # the message content as a <think>...</think> block instead of the separate
@@ -120,6 +161,43 @@ def strip_reasoning(text):
     return text.rsplit(THINK_CLOSE_TAG, 1)[1].lstrip()
 
 
+def visible_text(text):
+    """strip_reasoning() for a reply still streaming in: a <think> block that
+    has opened but not yet closed is reasoning so far, so none of it shows."""
+    if THINK_CLOSE_TAG not in text and text.lstrip().startswith("<think>"):
+        return ""
+    return strip_reasoning(text)
+
+
+class _Preview:
+    """Keeps a listener's view of the reply in step with the turn being written.
+
+    Each model turn streams its text through update(), and the listener hears
+    the difference as a "delta", or as a "replace" carrying the whole text when
+    the new text does not simply extend the old: a retry starting over, a
+    <think> block closing. A turn that ends in tool calls was not the reply, so
+    tools() wipes it. With no listener every call is a no-op.
+    """
+
+    def __init__(self, on_event):
+        self.on_event = on_event
+        self.shown = ""
+
+    def update(self, text):
+        if self.on_event is None or text == self.shown:
+            return
+        if text.startswith(self.shown):
+            self.on_event({"type": "delta", "text": text[len(self.shown):]})
+        else:
+            self.on_event({"type": "replace", "text": text})
+        self.shown = text
+
+    def tools(self, names):
+        self.shown = ""
+        if self.on_event is not None:
+            self.on_event({"type": "tools", "names": names})
+
+
 class Amadeus:
     def __init__(
         self,
@@ -135,17 +213,34 @@ class Amadeus:
         self.str_mem = STR_Memory(self.system_prompt, self.model, self.client)
         self.lt_mem = LongTermMemory()
 
-        # The tool registry. Workspace and terminal tools are plain
-        # module-level functions, so they can be shared; the memory tools are
-        # bound to this agent's own LongTermMemory and have to be built per
-        # instance.
-        self.schemas = SCHEMAS + memory_tool.SCHEMAS + terminal_linux.SCHEMAS + ntfy_tool.SCHEMAS
-        self.functions = {
-            **FUNCTIONS,
-            **terminal_linux.FUNCTIONS,
-            **memory_tool.build_functions(self.lt_mem),
-            **ntfy_tool.FUNCTIONS,
+        # The chat modes, switched from the settings panel. Workspace and
+        # terminal tools are plain module-level functions, so they can be
+        # shared; the memory tools are bound to this agent's own
+        # LongTermMemory and have to be built per instance.
+        self.modes = {
+            "full": ChatMode(
+                label="Full agent",
+                model=model,
+                schemas=SCHEMAS + memory_tool.SCHEMAS + terminal_linux.SCHEMAS + ntfy_tool.SCHEMAS,
+                functions={
+                    **FUNCTIONS,
+                    **terminal_linux.FUNCTIONS,
+                    **memory_tool.build_functions(self.lt_mem),
+                    **ntfy_tool.FUNCTIONS,
+                },
+            ),
+            # The shell and nothing else, on its own model. It reads the same
+            # conversation and long-term memory as the full agent but has no
+            # memory, file or notification tools of its own.
+            "terminal": ChatMode(
+                label="Terminal",
+                model=TERMINAL_MODEL,
+                schemas=terminal_linux.SCHEMAS,
+                functions=terminal_linux.FUNCTIONS,
+                note=TERMINAL_MODE_NOTE,
+            ),
         }
+        self.chat_mode = DEFAULT_CHAT_MODE
 
     def build_system_prompt(self) -> str:
         """Assemble the system prompt, persona files included.
@@ -199,15 +294,34 @@ class Amadeus:
         self.housekeeping_prompt = DEFAULT_HOUSEKEEPING_PROMPT
         return self.housekeeping_prompt
 
-    def run_tool(self, name: str, arguments: dict) -> str:
+    def change_chat_mode(self, mode: str) -> str:
+        """Switch which mode answers from the next message on.
+
+        A chat already in flight finishes in the mode it started in. Like the
+        iteration cap this lives in memory only, so a restart goes back to
+        DEFAULT_CHAT_MODE.
+        """
+        if mode not in self.modes:
+            raise ValueError(f"unknown chat mode '{mode}'")
+        self.chat_mode = mode
+        return self.chat_mode
+
+    def run_tool(self, name: str, arguments: dict, functions: dict) -> str:
         """Run one tool call and return the text the model should see.
+
+        `functions` is the calling mode's tool table, so a model can only run
+        what its mode offers: a terminal-mode call to a file tool it saw in the
+        history is refused like any other unknown name.
 
         Failures come back as text rather than raising: the model gets to read
         what went wrong and try again, instead of the whole request dying.
         """
-        function = self.functions.get(name)
+        function = functions.get(name)
         if function is None:
-            return f"Error: there is no tool named '{name}'."
+            return (
+                f"Error: there is no tool named '{name}'. "
+                f"Available: {', '.join(functions)}."
+            )
         try:
             return str(function(**arguments))
         except Exception as e:  # usually the model passing the wrong arguments
@@ -239,13 +353,31 @@ class Amadeus:
     # comes back as None, so the caller answers in words instead of letting
     # an exception kill the request. Tool failures already come back as text
     # (run_tool); model failures get the same treatment.
-    async def _call_model(self, messages, tools=None):
+    #
+    # The turn is streamed and put back together here: `preview` gets to show
+    # the text while it is being written, and every caller still receives one
+    # whole Message. Streaming changes when the words arrive, not what they
+    # are — same model, same prompt, same reply.
+    async def _call_model(self, model, messages, tools=None, preview=None):
         for attempt in (1, 2):
+            content, thinking, tool_calls = "", "", []
             try:
-                if tools is None:
-                    return await self.client.chat(model=self.model, messages=messages)
-                return await self.client.chat(
-                    model=self.model, messages=messages, tools=tools
+                stream = await self.client.chat(
+                    model=model, messages=messages, tools=tools, stream=True
+                )
+                async for chunk in stream:
+                    part = chunk.message
+                    thinking += part.thinking or ""
+                    tool_calls.extend(part.tool_calls or ())
+                    if part.content:
+                        content += part.content
+                        if preview is not None:
+                            preview.update(visible_text(content))
+                return ollama.Message(
+                    role="assistant",
+                    content=content,
+                    thinking=thinking or None,
+                    tool_calls=tool_calls or None,
                 )
             except Exception as e:
                 print(f"[agent] Model call failed (attempt {attempt}/2): {e!r}")
@@ -253,7 +385,7 @@ class Amadeus:
                     await asyncio.sleep(2)
         return None
 
-    async def _finalize_reply(self, message, context) -> str:
+    async def _finalize_reply(self, message, context, model, preview) -> str:
         """Turn the model's final (tool-free) turn into the text the user sees."""
         content = strip_reasoning(message.content or "")
         if content.strip():
@@ -266,11 +398,13 @@ class Amadeus:
         )
         print("[agent] Retrying once with an explicit answer-as-content nudge.")
 
-        response = await self._call_model(
-            context + [{"role": "user", "content": self.EMPTY_REPLY_NUDGE}]
+        retry = await self._call_model(
+            model,
+            context + [{"role": "user", "content": self.EMPTY_REPLY_NUDGE}],
+            preview=preview,
         )
-        if response is not None:
-            retried = strip_reasoning(response.message.content or "")
+        if retry is not None:
+            retried = strip_reasoning(retry.content or "")
             if retried.strip():
                 print("[agent] Retry recovered the reply.")
                 return retried
@@ -287,11 +421,25 @@ class Amadeus:
             "record — please send that again.)"
         )
 
-    async def chat(self, user_message: str, speak: bool = True):
-        """Answer the user, letting the model use the workspace tools as it goes.
+    async def chat(
+        self,
+        user_message: str,
+        speak: bool = True,
+        mode: str | None = None,
+        on_event=None,
+    ):
+        """Answer the user, letting the model use its mode's tools as it goes.
+
+        `mode` is a key of self.modes, and defaults to the one picked in the
+        settings panel. `on_event`, if given, is called with each change to
+        the reply as it streams in (see _Preview).
 
         `speak=False` skips voice generation — the heartbeat has no listener,
-        and the TTS round-trips would only overwrite the user's last audio."""
+        and the TTS round-trips would only overwrite the user's last audio.
+        The voice is generated in the background: the reply is returned as
+        soon as it is written, not once it has been spoken."""
+        mode = self.modes[mode or self.chat_mode]
+        preview = _Preview(on_event)
         # The loop talks to the model on top of `base`, a snapshot of shared
         # memory, and keeps its own turns in `turns` until the exchange is
         # finished. The hourly heartbeat and a user /chat share one agent and
@@ -302,17 +450,24 @@ class Amadeus:
         # A finished exchange, committed in one piece, can never split.
         self.refresh_system_prompt()
         base = self.str_mem.get_memory()
+        if mode.note:
+            # This chat's copy only; shared memory keeps the plain prompt.
+            base[0] = {"role": "system", "content": f"{self.system_prompt}\n\n{mode.note}"}
         timestamp = str(datetime.now())
         # Sync Ollama + Chroma calls: off the event loop so /health and other
         # requests are not frozen while the embedding runs.
-        context = await asyncio.to_thread(self.lt_mem.retrieve_memory, user_message)
+        context = await asyncio.to_thread(
+            self.lt_mem.retrieve_memory, user_message[:MEMORY_QUERY_CHARS]
+        )
         if context:
             user_message += f"\n\nContext from long-term memory:\n{context}"
         turns = [{"role": "user", "content": f"[{timestamp}] {user_message}"}]
 
         for _ in range(self.max_iterations):
-            response = await self._call_model(base + turns, tools=self.schemas)
-            if response is None:
+            message = await self._call_model(
+                mode.model, base + turns, tools=mode.schemas, preview=preview
+            )
+            if message is None:
                 # Nothing is committed: an exchange that never got an answer
                 # stays out of the context window instead of leaving a
                 # half-finished turn behind for the next chat to trip on.
@@ -321,15 +476,16 @@ class Amadeus:
                     "I couldn't reach my model just now — please send that "
                     "again in a moment."
                 )
-            message = response.message
 
             # No tool calls means this is the actual reply to the user.
             if not message.tool_calls:
-                reply = await self._finalize_reply(message, base + turns)
+                reply = await self._finalize_reply(
+                    message, base + turns, mode.model, preview
+                )
                 turns.append({"role": "assistant", "content": reply})
                 await self.str_mem.commit(turns)
                 if speak:
-                    await self._speak(reply)
+                    gen_voice.speak(reply)
                 return reply
 
             # The model's turn joins this chat's local exchange so that on the
@@ -338,6 +494,7 @@ class Amadeus:
             if "content" in turn:
                 turn["content"] = strip_reasoning(turn["content"])
             turns.append(turn)
+            preview.tools([call.function.name for call in message.tool_calls])
 
             # Tools block on shells, pty waits and file IO — run them in worker
             # threads so /chat and /health keep answering while a long command
@@ -347,7 +504,10 @@ class Amadeus:
             results = await asyncio.gather(
                 *(
                     asyncio.to_thread(
-                        self.run_tool, call.function.name, call.function.arguments
+                        self.run_tool,
+                        call.function.name,
+                        call.function.arguments,
+                        mode.functions,
                     )
                     for call in message.tool_calls
                 )
@@ -368,12 +528,14 @@ class Amadeus:
         # reply closes the exchange as an assistant turn, so a bare tool
         # result never ends up last in memory.
         print(f"[agent] Hit the {self.max_iterations}-round cap — asking for a final answer.")
-        response = await self._call_model(
-            base + turns + [{"role": "user", "content": self.CAP_REACHED_NUDGE}]
+        message = await self._call_model(
+            mode.model,
+            base + turns + [{"role": "user", "content": self.CAP_REACHED_NUDGE}],
+            preview=preview,
         )
         reply = ""
-        if response is not None:
-            reply = strip_reasoning(response.message.content or "")
+        if message is not None:
+            reply = strip_reasoning(message.content or "")
         if not reply.strip():
             reply = (
                 f"Stopped after {self.max_iterations} rounds of tool calls without "
@@ -382,13 +544,5 @@ class Amadeus:
         turns.append({"role": "assistant", "content": reply})
         await self.str_mem.commit(turns)
         if speak:
-            await self._speak(reply)
+            gen_voice.speak(reply)
         return reply
-
-    async def _speak(self, reply: str) -> None:
-        try:
-            await asyncio.to_thread(gen_voice.gen_voice, reply)
-        except Exception as e:
-            print(f"[voice] Generation failed: {e!r}")
-            return
-        print(f"Generated voice for reply: {reply}")

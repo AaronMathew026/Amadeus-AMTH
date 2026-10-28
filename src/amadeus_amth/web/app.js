@@ -10,6 +10,9 @@ const touch = matchMedia("(hover: none)").matches;
 let busy = false;
 
 const scrollDown = () => log.scrollTo({ top: log.scrollHeight });
+// False once the reader has scrolled up to read; a growing reply then stops
+// dragging the view down with it.
+const atBottom = () => log.scrollHeight - log.scrollTop - log.clientHeight < 80;
 const clock = () => new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
 // ---- markdown ----
@@ -366,6 +369,19 @@ const tMsgs = document.getElementById("t-msgs");
 const tLast = document.getElementById("t-last");
 const tVoice = document.getElementById("t-voice");
 
+// A reply that has no text yet: the typing dots, plus what is running when
+// the model is busy with tools.
+function showPending(bubble, activity = "") {
+  bubble.classList.remove("md");
+  bubble.innerHTML = '<span class="typing" aria-label="Amadeus is typing"><i></i><i></i><i></i></span>';
+  if (activity) {
+    const span = document.createElement("span");
+    span.className = "activity";
+    span.textContent = activity;
+    bubble.append(span);
+  }
+}
+
 // Returns the bubble so a pending turn can be filled in once the reply lands.
 function addTurn(role, text, time = clock()) {
   document.body.classList.add("started");
@@ -376,7 +392,7 @@ function addTurn(role, text, time = clock()) {
   turn.querySelector("time").textContent = time;
   const bubble = turn.querySelector(".bubble");
   if (text === null) {
-    bubble.innerHTML = '<span class="typing" aria-label="Amadeus is typing"><i></i><i></i><i></i></span>';
+    showPending(bubble);
   } else {
     setBody(bubble, text, role === "bot");
     turn.dataset.text = text;
@@ -445,6 +461,58 @@ function fill(bubble, text, isError) {
   turn.querySelector("time").textContent = clock();
 }
 
+// The lines of a newline-delimited JSON response, parsed as they arrive.
+async function* ndjson(response) {
+  const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+  let buffered = "";
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffered += value;
+      const lines = buffered.split("\n");
+      buffered = lines.pop();
+      for (const line of lines) if (line.trim()) yield JSON.parse(line);
+    }
+    if (buffered.trim()) yield JSON.parse(buffered);
+  } finally {
+    reader.cancel().catch(() => {});
+  }
+}
+
+// Shows the reply in `bubble` while /chat/stream writes it, and resolves with
+// the finished one: the same {response, audio} /chat returns, which the
+// caller renders over the draft. The draft is repainted at most once a frame,
+// since every paint re-renders its markdown from the top.
+async function streamReply(response, bubble) {
+  let draft = "", activity = "", frame = 0;
+  const paint = () => {
+    frame = 0;
+    const following = atBottom();
+    if (draft) setBody(bubble, draft, true);
+    else showPending(bubble, activity);
+    if (following) scrollDown();
+  };
+  try {
+    for await (const event of ndjson(response)) {
+      if (event.type === "done") return event;
+      if (event.type === "error") throw new Error(event.message);
+      if (event.type === "delta") draft += event.text;
+      else if (event.type === "replace") draft = event.text;
+      else if (event.type === "tools") {
+        // That turn's text was not the reply; the model is working instead.
+        draft = "";
+        activity = `running ${[...new Set(event.names)].join(", ")}`;
+      }
+      if (draft) activity = "";
+      frame ||= requestAnimationFrame(paint);
+    }
+  } finally {
+    cancelAnimationFrame(frame);
+  }
+  throw new Error("the connection closed before the reply was finished");
+}
+
 function setStatus(online) {
   statusEl.className = "status " + (online ? "online" : "offline");
   statusText.textContent = online ? "Online" : "Offline";
@@ -488,14 +556,16 @@ form.onsubmit = async (e) => {
 
   try {
     const files = await uploadAll(toUpload);
-    const r = await fetch("/chat", {
+    const r = await fetch("/chat/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message: text, files, speak: voiceEnabled.checked }),
     });
     if (!r.ok) throw new Error(`server returned ${r.status}`);
-    const result = await r.json();
+    const result = await streamReply(r, pending);
+    const following = atBottom();
     fill(pending, result.response);
+    if (following) scrollDown();
     tLast.textContent = Math.round(performance.now() - t0) + " ms";
     playVoice(result.audio);
     // Fire and forget: the face follows the reply, it never holds it up.
@@ -510,13 +580,13 @@ form.onsubmit = async (e) => {
     setStatus(true);
   } catch (err) {
     fill(pending, String(err), true);
+    scrollDown();
     ping();
   } finally {
     busy = false;
     syncSend();
     document.body.classList.remove("thinking");
     if (!touch && !document.body.classList.contains("settings-open")) msg.focus();
-    scrollDown();
   }
 };
 
@@ -552,6 +622,9 @@ const hkNote = document.getElementById("hk-note");
 const voiceEnabled = document.getElementById("voice-enabled");
 const voicePlayer = document.getElementById("voice-player");
 const VOICE_ENABLED_KEY = "amadeus:voice-enabled";
+const modeInputs = [...document.querySelectorAll('input[name="chat-mode"]')];
+const modeNote = document.getElementById("mode-note");
+const tMode = document.getElementById("t-mode");
 
 // Last state the server confirmed. Every field compares against this to decide
 // whether it is dirty, so Save only lights up when there is a real change.
@@ -594,6 +667,18 @@ function applySettings(data) {
   if (!iterDirty) iterNum.value = iterRange.value = data.max_iterations;
   if (!hkDirty) hkPrompt.value = data.housekeeping_prompt;
   syncPanel();
+  syncMode();
+}
+
+// The mode is a server setting, so the radios always show the server's
+// choice — it is the same for every device talking to this Amadeus.
+function syncMode() {
+  if (!settings) return;
+  for (const input of modeInputs) input.checked = input.value === settings.chat_mode;
+  for (const el of panel.querySelectorAll("[data-model]")) {
+    el.textContent = settings.chat_modes[el.dataset.model]?.model ?? "?";
+  }
+  tMode.textContent = settings.chat_mode.toUpperCase();
 }
 
 async function settingsRequest(path, body) {
@@ -678,6 +763,23 @@ resetHk.onclick = () =>
     hkPrompt.value = settings ? settings.housekeeping_prompt : hkPrompt.value;
     await settingsRequest("/settings/housekeeping-prompt/reset");
   }, "Housekeeping prompt reset to the default.");
+
+// A radio has nothing to confirm, so a pick applies straight away.
+for (const input of modeInputs) {
+  input.addEventListener("change", async () => {
+    modeInputs.forEach((i) => { i.disabled = true; });
+    try {
+      await settingsRequest("/settings/chat-mode", { mode: input.value });
+      const mode = settings.chat_modes[settings.chat_mode];
+      note(modeNote, `${mode.label} (${mode.model}) answers from the next message.`, "ok");
+    } catch (err) {
+      note(modeNote, String(err), "bad");
+      syncMode(); // back to the mode the server still has
+    } finally {
+      modeInputs.forEach((i) => { i.disabled = false; });
+    }
+  });
+}
 
 
 /* ---------------- self destruct ----------------
@@ -827,3 +929,5 @@ document.addEventListener("visibilitychange", () => {
 if (!touch) msg.focus();
 loadHistory();
 ping();
+// For the MODE readout; the drawer fetches its own fresh copy when opened.
+settingsRequest("/settings").catch(() => {});
