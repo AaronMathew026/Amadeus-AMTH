@@ -9,7 +9,7 @@ from amadeus_amth import gen_voice
 from .memory.str_memory import STR_Memory
 from .memory.lt_memory import LongTermMemory
 from .tools import memory_tool, terminal_linux, ntfy_tool
-from .tools.workspace_tool import FUNCTIONS, SCHEMAS
+from .tools.workspace_tool import FUNCTIONS, SCHEMAS, WORKSPACE_ROOT
 from datetime import datetime, timedelta
 
 load_dotenv()
@@ -30,12 +30,48 @@ MAX_ITERATIONS_LIMIT = 100
 # without touching the code; the literals below are the fallback.
 DEFAULT_MODEL = os.getenv("BASE_MODEL") or "gemma4:31b-cloud"
 DEFAULT_SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT") or (
-    "You are Amadeus, a personal AI assistant created by Aaron. You are a large "
-    "language model that can answer questions, provide information, and assist "
-    "with various tasks. You are knowledgeable in a wide range of topics and can "
-    "provide helpful and accurate responses. You are also capable of engaging in "
-    "casual conversation and providing entertainment. Your goal is to be helpful, "
-    "informative, and engaging for the user."
+    "You are Amadeus, Aaron's personal AI partner. Who you are — your "
+    "personality, voice and boundaries — is set out in IDENTITY.md and SOUL.md "
+    "below. Be that person in every reply; never fall back into a generic "
+    "assistant voice."
+)
+
+# How to sound in conversation. Lives next to FORMAT_GUIDE for the same
+# reason: the persona files say *who* Amadeus is, this says how a chat reply
+# should read, and a blank SYSTEM_PROMPT must not lose it.
+CONVERSATION_STYLE = (
+    "How you talk: this is a chat, not a document. Write the way you would "
+    "actually text Aaron, in your own voice from SOUL.md.\n"
+    "- Match the message. A greeting, a quick question or small talk gets one "
+    "to three sentences, plain prose: no headings, no bullet points, no bold.\n"
+    "- Say the thing. No restating his question, no preamble (\"Sure!\", "
+    "\"Great question\", \"Certainly\"), no closing summary, no \"Let me know "
+    "if you need anything else\". If you have a follow-up, ask one, briefly.\n"
+    "- Sound like a person: contractions, natural rhythm, the odd short "
+    "fragment. One thought per message is fine; you don't have to cover every "
+    "angle.\n"
+    "- Go long only when the request needs it: explanations he asked for, "
+    "code, plans, research, step-by-step help, or reports on work you did. "
+    "Then be as thorough as the task demands and use Markdown structure where "
+    "it helps — but still lead with the answer, and still in your voice.\n"
+    "- Replies are also read aloud, so a short spoken-sounding reply is better "
+    "than a long written one whenever both would do.\n"
+    "Where these clash with your Voice section in SOUL.md, SOUL.md wins: "
+    "courteous and precise, just not long-winded."
+)
+
+# The persona files the agent keeps in its workspace. They are read into the
+# system prompt rather than left for the model to fetch with a tool: a tool
+# read sits in the conversation and is lost at the next condense, so the voice
+# drifted back to generic-assistant. Re-read every chat so an edit to USER.md
+# lands without a restart.
+PERSONA_FILES = ("IDENTITY.md", "SOUL.md", "USER.md")
+
+# Only sent while a persona file is missing — the first-launch onboarding.
+ONBOARDING_MESSAGE = (
+    "Some of your persona files are missing from the workspace: {missing}. "
+    "On the user's next message, ask them for the information needed to fill "
+    "them in, then write the files."
 )
 
 # What the web UI can render (web/app.js). Kept here rather than in .env so
@@ -50,8 +86,8 @@ FORMAT_GUIDE = (
     "Use standard commands (\\lceil, \\le, \\frac{a}{b}, \\sum_{i=1}^{n}, "
     "\\log_2) and do not put math inside backticks or code blocks; reserve those "
     "for code. Write a literal dollar sign for money as plain text (\"$5\"), "
-    "not as math. Use Markdown for everything else (headings, lists, tables, "
-    "bold)."
+    "not as math. When a reply needs structure, use Markdown (headings, "
+    "lists, tables, bold); conversational replies are plain sentences."
 )
 
 # What the hourly heartbeat sends itself. Editable from the settings panel;
@@ -89,19 +125,13 @@ class Amadeus:
         self,
         model: str = DEFAULT_MODEL,
         system_prompt: str = DEFAULT_SYSTEM_PROMPT,
-        startup_message: str = "Your main server is running. This may the first time you have been launched. On the next user message check  for the Following files. IDENTITY.md,SOUL.md,USER.md, once the user sends their message, check if these files exist, if they do, continue as if you already know them. If these files are mssing, promptly ask them for the information required to fill the files in. THIS IS A CRITICAL MESSAGE, DO NOT FORGET IT.",
-
     ):
         self.model = model
         self.client = ollama.AsyncClient()
         self.max_iterations = DEFAULT_MAX_ITERATIONS
         self.housekeeping_prompt = DEFAULT_HOUSEKEEPING_PROMPT
-        # describe_access() goes in with the prompt because the terminal access
-        # level is fixed at import time: the model is told what it may run
-        # before it starts guessing and getting refused.
-        self.system_prompt = "\n\n".join(
-            [system_prompt, FORMAT_GUIDE, terminal_linux.describe_access(), startup_message]
-        )
+        self.base_prompt = system_prompt
+        self.system_prompt = self.build_system_prompt()
         self.str_mem = STR_Memory(self.system_prompt, self.model, self.client)
         self.lt_mem = LongTermMemory()
 
@@ -116,6 +146,35 @@ class Amadeus:
             **memory_tool.build_functions(self.lt_mem),
             **ntfy_tool.FUNCTIONS,
         }
+
+    def build_system_prompt(self) -> str:
+        """Assemble the system prompt, persona files included.
+
+        describe_access() goes in with the prompt because the terminal access
+        level is fixed at import time: the model is told what it may run
+        before it starts guessing and getting refused.
+        """
+        persona, missing = [], []
+        for name in PERSONA_FILES:
+            try:
+                text = (WORKSPACE_ROOT / name).read_text(encoding="utf-8").strip()
+            except OSError:
+                text = ""
+            if text:
+                persona.append(text)
+            else:
+                missing.append(name)
+
+        parts = [self.base_prompt, *persona, CONVERSATION_STYLE, FORMAT_GUIDE,
+                 terminal_linux.describe_access()]
+        if missing:
+            parts.append(ONBOARDING_MESSAGE.format(missing=", ".join(missing)))
+        return "\n\n".join(parts)
+
+    def refresh_system_prompt(self):
+        """Pick up edits to the persona files before the next model call."""
+        self.system_prompt = self.build_system_prompt()
+        self.str_mem.memory[0] = {"role": "system", "content": self.system_prompt}
 
     def fetch_STR_memory(self):
         pass
@@ -233,6 +292,7 @@ class Amadeus:
         # after another chat's user turn, or an unanswered tool-call turn cut
         # off by a condense — and Ollama rejects such sequences outright.
         # A finished exchange, committed in one piece, can never split.
+        self.refresh_system_prompt()
         base = self.str_mem.get_memory()
         timestamp = str(datetime.now())
         # Sync Ollama + Chroma calls: off the event loop so /health and other
