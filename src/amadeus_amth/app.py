@@ -116,7 +116,15 @@ async def chat(request: ChatRequest):
         uploads.attach(request.message, request.files), speak=request.speak
     )
     append_log("Amadeus", reply)
-    return {"response": reply, "audio": "/voice/output.mp3" if request.speak else None}
+    # Point at this reply's own clip, not output.mp3: when voice generation
+    # fails or a path returns without speaking, output.mp3 still holds the
+    # previous reply, and the UI would play that as if it were this one.
+    audio = None
+    if request.speak:
+        clip_id = gen_voice.voice_id_for(reply)
+        if gen_voice.replay_path(clip_id).is_file():
+            audio = f"/voice/{clip_id}.mp3"
+    return {"response": reply, "audio": audio}
 
 
 class ReplayRequest(BaseModel):

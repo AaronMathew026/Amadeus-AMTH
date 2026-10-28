@@ -225,6 +225,14 @@ class Amadeus:
         "no hidden reasoning."
     )
 
+    # Sent, without tools, once the iteration cap runs out.
+    CAP_REACHED_NUDGE = (
+        "You have used all your tool-call rounds for this message, so no more "
+        "tools are available. Reply now with your final answer as plain "
+        "message content, based on what you have done so far. If the task is "
+        "not finished, say what is done and what is left."
+    )
+
     # Cloud models and the Ollama server in front of them fail a request
     # outright now and then — a timeout, a 5xx from ollama.com. One quick
     # retry absorbs the transient hiccups; a failure that survives the retry
@@ -321,11 +329,7 @@ class Amadeus:
                 turns.append({"role": "assistant", "content": reply})
                 await self.str_mem.commit(turns)
                 if speak:
-                    try:
-                        await asyncio.to_thread(gen_voice.gen_voice, reply)
-                    except Exception as e:
-                        print(f"[voice] Generation failed: {e!r}")
-                    print(f"Generated voice for reply: {reply}")
+                    await self._speak(reply)
                 return reply
 
             # The model's turn joins this chat's local exchange so that on the
@@ -357,12 +361,34 @@ class Amadeus:
                     }
                 )
 
-        # The cap ran out mid-task. The stop notice closes the exchange as an
-        # assistant turn, so a bare tool result never ends up last in memory.
-        reply = (
-            f"Stopped after {self.max_iterations} rounds of tool calls without "
-            f"reaching an answer."
+        # The cap ran out mid-task. Often the work is already done and the last
+        # round was only a closing tool call (a memory write, a log), so the
+        # model gets one tool-free turn to answer from what it has instead of
+        # the exchange being thrown away. The nudge is not committed; the
+        # reply closes the exchange as an assistant turn, so a bare tool
+        # result never ends up last in memory.
+        print(f"[agent] Hit the {self.max_iterations}-round cap — asking for a final answer.")
+        response = await self._call_model(
+            base + turns + [{"role": "user", "content": self.CAP_REACHED_NUDGE}]
         )
+        reply = ""
+        if response is not None:
+            reply = strip_reasoning(response.message.content or "")
+        if not reply.strip():
+            reply = (
+                f"Stopped after {self.max_iterations} rounds of tool calls without "
+                f"reaching an answer."
+            )
         turns.append({"role": "assistant", "content": reply})
         await self.str_mem.commit(turns)
+        if speak:
+            await self._speak(reply)
         return reply
+
+    async def _speak(self, reply: str) -> None:
+        try:
+            await asyncio.to_thread(gen_voice.gen_voice, reply)
+        except Exception as e:
+            print(f"[voice] Generation failed: {e!r}")
+            return
+        print(f"Generated voice for reply: {reply}")
