@@ -1,5 +1,6 @@
 from dotenv import load_dotenv
 from elevenlabs import ElevenLabs
+import asyncio
 import hashlib
 import os
 import shutil
@@ -96,8 +97,14 @@ Your entire response must be the final tagged message and nothing else.
 """
 
 def auto_tag(text):
+    # beam reasons at length before it tags anything. Over the same replies its
+    # default effort averaged 8.8 s (worst 16.7 s, up to 30 s in other runs);
+    # "low" averaged 5.5 s (worst 8.6 s) with every expansion still right. The
+    # cost: on "low" it now and then uses a tag that is not on the list below
+    # ([warmly] and [fast] in testing).
     response = ollama.chat(
         model="beam:cloud",
+        think="low",
         messages = [
             {"role": "system", "content": TAGGING_PROMPT},
             {"role": "user", "content": text},
@@ -141,12 +148,67 @@ def gen_voice(text):
 
     VOICE_DIR.mkdir(exist_ok=True)
     clip = replay_path(text_id)
-    with clip.open("wb") as f:
-        for chunk in audio:
-            f.write(chunk)
+    # Written under a temporary name and renamed into place, so a clip on disk
+    # is always a whole one: a stream that dies halfway leaves no truncated
+    # clip behind to be served and replayed as if it were finished.
+    part = clip.with_name(clip.name + ".part")
+    try:
+        with part.open("wb") as f:
+            for chunk in audio:
+                f.write(chunk)
+    except BaseException:
+        part.unlink(missing_ok=True)
+        raise
+    os.replace(part, clip)
     shutil.copyfile(clip, VOICE_DIR / "output.mp3")
     _prune()
     return text_id
+
+
+# Clips still being generated, by id. A reply's text goes out as soon as it is
+# written and its voice follows; whoever asks for the clip in between waits on
+# the generation here instead of finding nothing.
+_generating = {}
+
+
+def speak(text):
+    """Start voicing `text` in the background and return its clip id at once.
+
+    A clip already on disk, or already on its way, is not generated twice.
+    Called from the event loop.
+    """
+    clip_id = voice_id_for(text)
+    if clip_id not in _generating and not replay_path(clip_id).is_file():
+        _generating[clip_id] = asyncio.create_task(_generate(clip_id, text))
+    return clip_id
+
+
+async def _generate(clip_id, text):
+    try:
+        await asyncio.to_thread(gen_voice, text)
+        print(f"Generated voice for reply: {text}")
+    except Exception as e:
+        print(f"[voice] Generation failed: {e!r}")
+    finally:
+        _generating.pop(clip_id, None)
+
+
+def has_clip(clip_id):
+    """True once a clip exists or is being generated."""
+    return clip_id in _generating or replay_path(clip_id).is_file()
+
+
+async def clip_path(clip_id):
+    """The clip's file, once it is ready — or None if it never will be.
+
+    The wait is shielded: a listener giving up on it must not cancel the
+    generation for everyone else.
+    """
+    task = _generating.get(clip_id)
+    if task is not None:
+        await asyncio.shield(task)
+    path = replay_path(clip_id)
+    return path if path.is_file() else None
 
 
 if __name__ == "__main__":

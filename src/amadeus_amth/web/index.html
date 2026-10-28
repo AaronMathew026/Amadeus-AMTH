@@ -35,6 +35,7 @@
       <div><dt>MSGS</dt><dd id="t-msgs">0</dd></div>
       <div><dt>LATENCY</dt><dd id="t-last">—</dd></div>
       <div><dt>VOICE</dt><dd id="t-voice">ON</dd></div>
+      <div><dt>MODE</dt><dd id="t-mode">—</dd></div>
     </dl>
 
     <div class="grow"></div>
@@ -87,6 +88,22 @@
   </div>
 
   <div class="panel-body">
+    <section class="field">
+      <label id="mode-label">Chat mode</label>
+      <p class="help">Which Amadeus answers your next message. Both share the same conversation and long-term memory.</p>
+      <div class="modes" role="radiogroup" aria-labelledby="mode-label">
+        <label class="mode">
+          <input type="radio" name="chat-mode" value="full">
+          <span><b>Full agent</b><small><code data-model="full">…</code> · files, terminal, memory, notifications</small></span>
+        </label>
+        <label class="mode">
+          <input type="radio" name="chat-mode" value="terminal">
+          <span><b>Terminal</b><small><code data-model="terminal">…</code> · terminal tools only</small></span>
+        </label>
+      </div>
+      <p class="note" id="mode-note" role="status"></p>
+    </section>
+
     <section class="field">
       <label for="iter-num">Max iterations</label>
       <p class="help">How many rounds of tool calls Amadeus may take on one message before it has to stop and answer.</p>

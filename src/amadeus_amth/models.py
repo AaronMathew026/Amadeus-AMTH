@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from .agent import MAX_ITERATIONS_LIMIT, MIN_ITERATIONS
@@ -21,3 +23,9 @@ class HousekeepingPromptRequest(BaseModel):
     # min_length keeps an empty box from turning the heartbeat into a beat that
     # sends the model nothing to act on.
     prompt: str = Field(min_length=1)
+
+
+class ChatModeRequest(BaseModel):
+    # The keys of Amadeus.modes, spelled out so a mode that does not exist
+    # comes back as a 422 like every other bad setting.
+    mode: Literal["full", "terminal"]

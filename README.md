@@ -6,10 +6,11 @@ Layout
 src/amadeus_amth/
   __init__.py             main() — the uvicorn launcher behind the console script
   __main__.py             python -m amadeus_amth
-  app.py                  FastAPI app: POST /chat, GET /health, the heartbeat
-                          lifespan and the web client mount
-  agent.py                Amadeus — the model turn/tool-call loop; stamps each
-                          user message with a timestamp as it enters memory
+  app.py                  FastAPI app: POST /chat and /chat/stream, GET /health,
+                          the heartbeat lifespan and the web client mount
+  agent.py                Amadeus — the model turn/tool-call loop and the two
+                          chat modes; streams every turn, and stamps each user
+                          message with a timestamp as it enters memory
   models.py               request schemas
   memory/str_memory.py    short-term rolling conversation memory
   memory/lt_memory.py     LongTermMemory — durable facts in a local ChromaDB
@@ -31,8 +32,9 @@ workspace/                the agent's own scratch space (it writes here;
 Setup
 Requires Python 3.14, uv, and a reachable
 Ollama instance.
-Two Ollama models are needed:
-the chat model named in `BASE_MODEL` (below), and
+Three Ollama models are needed:
+the chat model named in `BASE_MODEL` (below),
+the terminal mode's model, `TERMINAL_MODEL` (`beam:cloud` unless set), and
 `bge-m3`, the embedding model long-term memory embeds every fact with —
 `ollama pull bge-m3`.
 ```sh
@@ -50,6 +52,11 @@ Serves on `http://127.0.0.2:8000`:
 routes
 `GET /health` — liveness check
 `POST /chat` — takes `{"message": "..."}` and returns `{"response": "..."}`
+`POST /chat/stream` — the same exchange, sent as it happens: one JSON event
+per line (`delta`, `replace` and `tools` while the reply is written, then
+`done` with the finished reply). The web UI uses this one.
+A reply never waits for its voice: the clip is generated in the background,
+and `GET /voice/<id>.mp3` holds the request until it is ready.
 Open `http://127.0.0.2:8000/` in a browser for the web UI. To chat from a
 terminal instead:
 ```sh
@@ -70,10 +77,21 @@ store under `memory/semantic_memory/`, embedded with `bge-m3`. Similar
 memories are injected into context ahead of every turn automatically, and
 the agent can deliberately store and search facts through the
 `save_memory` and `retrieve_memory` tools.
+Chat modes
+Settings → Chat mode picks who answers the next message:
+Full agent — `BASE_MODEL` with every tool: files, terminal, memory,
+notifications.
+Terminal — `TERMINAL_MODEL` with the terminal tools only.
+Both work on the same short-term conversation and get the same long-term
+memory lookup, so switching mid-conversation keeps the thread; the terminal
+mode just has no memory, file or notification tools of its own. The choice
+lives in memory like the other server settings and goes back to the full agent
+on restart. The heartbeat always runs as the full agent.
 Configuration
 All optional except `BASE_MODEL`:
 Variable	What it controls
 `BASE_MODEL`	the Ollama chat model
+`TERMINAL_MODEL`	the terminal chat mode's model (default `beam:cloud`)
 `SYSTEM_PROMPT`	the agent's system prompt
 `AMADEUS_WORKSPACE`	relocates the directory the file tools are allowed to touch
 `AMADEUS_TERMINAL_ACCESS`	terminal access level — see below
