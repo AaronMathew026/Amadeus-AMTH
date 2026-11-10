@@ -14,7 +14,9 @@ ollama = ollama.Client()
 
 
 elevenlabs = ElevenLabs(api_key=os.getenv("ELEVEN_LABS_API_KEY"))
-voice_id = os.getenv("VOICE_ID") or "21m00Tcm4TlvDq8ikWAM"
+# Which voice speaks is deployment config, not source: set VOICE_ID in .env.
+# The fallback is ElevenLabs' stock "Rachel" premade voice.
+voice_id = (os.getenv("VOICE_ID") or "").strip() or "21m00Tcm4TlvDq8ikWAM"
 TAGGING_PROMPT = r"""
 You are an ElevenLabs audio-tagging assistant.
 

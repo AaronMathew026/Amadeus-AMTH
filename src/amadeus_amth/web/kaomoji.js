@@ -1,5 +1,5 @@
-/* Pixel kaomoji for the chat sidebar. Sprites and emotions come from
-   hand-drawn sprite grids; Kaomoji.set(name) swaps the emotion being animated. */
+/* Pixel kaomoji for the chat sidebar: hand-drawn 35x24 sprite grids, one
+   animation per emotion. Kaomoji.set(name) swaps the emotion being animated. */
 (() => {
 const W = 35, H = 24, S = 6;
 const COLORS = {
